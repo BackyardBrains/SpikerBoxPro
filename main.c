@@ -4,6 +4,7 @@
  *  Build 008
  *
  *  This version has power rail detection and it responds on message about power state.
+ *  It works with active HIGH RGB LED
  *  Stanislav Mircic 26 Sep 2016
  * ======== main.c ========
  */
@@ -25,9 +26,9 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "0.08"  // firmware version. Try to keep it to 4 characters
-#define HARDWARE_TYPE "NEURONSB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
-#define HARDWARE_VERSION "0.5"  // hardware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "0.09"  // firmware version. Try to keep it to 4 characters
+#define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
+#define HARDWARE_VERSION "0.91"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
 #define DEBOUNCE_TIME 2000
 #define MAX_SAMPLE_RATE "10000" //this will be sent to Host when host asks for maximal ratings
@@ -53,7 +54,7 @@
 
 
 #define POWER_MODE_SOLID_GREEN 0
-#define POWER_MODE_BLINKING_GREEN 1
+#define POWER_MODE_SOLID_RED 1
 #define POWER_MODE_BLINKING_RED 2
 #define POWER_MODE_LEDS_OFF 3
 int powerMode = 0;
@@ -139,6 +140,10 @@ unsigned int eventEnabled5 = 1;
 //flag to start BSL
 unsigned int enterTheBSL = 0;
 
+//flag that lock circular buffer
+//(used to block adding samples while adding messages)
+unsigned int circularBufferLocked = 0;
+
 //changes when we detect board
 unsigned int operationMode = 0;
 
@@ -206,14 +211,14 @@ void main (void)
        //LED diode (BIT0, BIT1) and relay (BIT7)
        P4SEL = 0;//digital I/O
        P4DIR = GREEN_LED + BLUE_LED + RELAY_OUTPUT;
-       P4OUT = GREEN_LED + BLUE_LED;//active LOW RGB
+       P4OUT = 0;//active LOW RGB
 
 
        //Enable disable powersupply on P1.0
        //Power down blinking LED on P1.1
 	   P1SEL = 0;//digital I/O
 	   P1DIR = RED_LED + POWER_ENABLE;
-	   P1OUT =   RED_LED + POWER_ENABLE;
+	   P1OUT =  POWER_ENABLE;
 
 
 
@@ -578,7 +583,7 @@ void sendStringWithEscapeSequence(char * stringToSend)
 	//check if sampling timer is turned ON
 	int weAreSendingSamples = TA0CCTL0 & CCIE;
 
-
+	circularBufferLocked = 1;
 		//now put it to output buffer/s
 		for(i=0;i<length;i++)
 		{
@@ -605,6 +610,7 @@ void sendStringWithEscapeSequence(char * stringToSend)
 			}
 			difference = 62;
 		}
+		circularBufferLocked = 0;
 }
 
 
@@ -756,7 +762,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 				}
 				else
 				{
-					powerMode = POWER_MODE_BLINKING_GREEN;
+					powerMode = POWER_MODE_SOLID_RED;
 				}
 
 		}
@@ -764,13 +770,13 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 		{
 			if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_HIGH)  //LOW_RAIL_VOLTAGE_FIRST_LOW > X > LOW_RAIL_VOLTAGE_SECOND_HIGH
 			{
-				powerMode = POWER_MODE_BLINKING_GREEN;
+				powerMode = POWER_MODE_SOLID_RED;
 			}
 			else
 			{
 				if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_LOW)  //LOW_RAIL_VOLTAGE_SECOND_HIGH > X > LOW_RAIL_VOLTAGE_SECOND_LOW
 				{
-						if(powerMode == POWER_MODE_BLINKING_GREEN)
+						if(powerMode == POWER_MODE_SOLID_RED)
 						{
 							//do nothing it is in POWER_MODE_SOLID_GREEN
 						}
@@ -816,11 +822,15 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 	switch(powerMode)
 	{
 		case POWER_MODE_SOLID_GREEN:
+			P4OUT |= GREEN_LED;
+			P1OUT &=  ~(RED_LED);
+			P1OUT |= POWER_ENABLE;
+		break;
+		case POWER_MODE_SOLID_RED:
 			P4OUT &= ~(GREEN_LED);
 			P1OUT |=  RED_LED;
 			P1OUT |= POWER_ENABLE;
 		break;
-		case POWER_MODE_BLINKING_GREEN:
 		case POWER_MODE_BLINKING_RED:
 			P1OUT |= POWER_ENABLE;
 			if(blinkingLowVoltageTimer>0)
@@ -830,22 +840,15 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 			else
 			{
 				blinkingLowVoltageTimer = BLINKING_LOW_VOLTAGE_TIMER_MAX_VALUE;
-				if(powerMode == POWER_MODE_BLINKING_GREEN)
-				{
-					P4OUT ^=  GREEN_LED;
-					P1OUT |=  RED_LED;
-				}
-				else
-				{
-					P1OUT ^=  RED_LED;
-					P4OUT |=  GREEN_LED;
-				}
+
+				P1OUT ^=  RED_LED;//blinking red
+				P4OUT &=  ~(GREEN_LED);
 			}
 		break;
 		case POWER_MODE_LEDS_OFF:
 			P1OUT &= ~(POWER_ENABLE);
-			P1OUT |=  RED_LED;
-			P4OUT |=  GREEN_LED;
+			P1OUT &=  ~(RED_LED);
+			P4OUT &=  ~(GREEN_LED);
 		break;
 	}
 
@@ -867,22 +870,23 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 		if(blinkingBoardDetectionTimer>0)
 		{
 			blinkingBoardDetectionTimer = blinkingBoardDetectionTimer -1;
-			P1OUT |=  RED_LED;
-			P4OUT |=  GREEN_LED;
+			//turn off all except blue LED
+			P1OUT &=  ~(RED_LED);
+			P4OUT &=  ~(GREEN_LED);
 
 		}
 		else
 		{
 			blinkingBoardDetectionTimer = BLINKING_BOARD_DETECTION_TIMER_MAX_VALUE;
-			P4OUT ^=  BLUE_LED;
-
-			P1OUT |=  RED_LED;
-			P4OUT |=  GREEN_LED;
+			P4OUT ^=  BLUE_LED;//blink blue LED
+			//turn off all except blue led
+			P1OUT &=  ~(RED_LED);
+			P4OUT &=  ~(GREEN_LED);
 		}
 	}
 	else
 	{
-		P4OUT |=  BLUE_LED;
+		P4OUT &=  ~(BLUE_LED);
 		//if board detection voltage is changing
 		if((currentEncoderVoltage - lastEncoderVoltage)>100 || (lastEncoderVoltage - currentEncoderVoltage)>100)
 		{
@@ -1121,7 +1125,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 	//========== ADC code ======================
 
-	if(sampleData == 1)
+	if(sampleData == 1 && circularBufferLocked ==0)
 	{
 
 			tempIndex = head;//remember position of begining of frame to put flag bit
