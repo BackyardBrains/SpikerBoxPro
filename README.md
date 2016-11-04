@@ -25,7 +25,7 @@ Details of V0.09 firmware for SpikerBox Pro (Neuron and Muscle)
 - controls hardware I/O interface that enables additional 2 analog channels and up to 5 digital inputs for
    triggering of events. Details on I/O interface can be found in:
    ([SpikerBox Pro Hardware SDK](documentation/SpikerBoxProHardwareSDK.pdf))
-- mesure state of power rail and controls power indication RGB LED.
+- mesure state of power rail and controls power indicator RGB LED.
  
 
 
