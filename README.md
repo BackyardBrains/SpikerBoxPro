@@ -19,7 +19,8 @@ Details of V0.09 firmware for SpikerBox Pro (Neuron and Muscle)
       - sends information state of power rail in device (ON or OFF)
       - start firmware update procedure
       - sends information about type of device connected to hardware I/O interface
-      Detailed explanation of messages and communication protocol can be found in:
+      
+ Detailed explanation of messages and communication protocol can be found in:
  ([Guide for implementation of Host software for SpikerBox HID USB device](documentation/SpikeRecorderHIDspecification.pdf))
 - controls hardware I/O interface that enables additional 2 analog channels and up to 5 digital inputs for
    triggering of events. Details on I/O interface can be found in:
