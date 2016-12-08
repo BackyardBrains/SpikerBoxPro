@@ -28,7 +28,7 @@
 //================ Parameters ===================
 #define FIRMWARE_VERSION "0.09"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
-#define HARDWARE_VERSION "0.91"  // hardware version. Try to keep it to 4 characters
+#define HARDWARE_VERSION "0.92"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
 #define DEBOUNCE_TIME 2000
 #define MAX_SAMPLE_RATE "10000" //this will be sent to Host when host asks for maximal ratings
@@ -64,7 +64,6 @@ int powerMode = 0;
 #define RED_LED BIT1
 
 #define RELAY_OUTPUT BIT7
-
 
 #define POWER_ENABLE BIT0
 #define POWER_RAIL_MEASUREMENT_PIN BIT0
@@ -290,9 +289,11 @@ void main (void)
             	   }
 
             	   // ----------- sending
-            	   if(difference >61 && bHIDDataSent_event)
+            	   if (difference > 61 && bHIDDataSent_event)
             	   {
+
             		   bHIDDataSent_event = FALSE;
+
             		   while(difference > generalIndexVar && generalIndexVar<62)
 					   {
 						   tempSendBuffer[generalIndexVar] = circularBuffer[tail];
@@ -1259,5 +1260,6 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 	}
 //Uncomment this when not using repeat of sequence
 	ADC12CTL0 &= ~ADC12SC;
+
 
 }
