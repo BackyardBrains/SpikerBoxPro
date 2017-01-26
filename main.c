@@ -26,7 +26,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.00"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.02"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -135,6 +135,16 @@ unsigned int eventEnabled3 = 1;
 unsigned int eventEnabled4 = 1;
 unsigned int eventEnabled5 = 1;
 
+//if watchdog timer for battery is enabled (default 1 - enabled)
+unsigned int saveBatteryTimerEnabled = 1;
+//5 seconds indication blue LED timer max value
+#define SAVE_BATTERY_LED_COUNTER_MAX_VALUE 50000
+//5 seconds indication blue LED timer
+unsigned int saveBatteryLEDIndicatorCounter = 0;
+#define POWER_WATCH_DOG_TIMER_MAX_VALUE 18000000
+long powerWatchDogTimerCounter = 0;
+unsigned int resetPowerWatchDogTimerCounter = 0;
+#define THRESHOLD_FOR_POWER_SAVING 574 //(1.85/3.3)*1023
 
 //flag to start BSL
 unsigned int enterTheBSL = 0;
@@ -226,6 +236,23 @@ void main (void)
 	   //set A8 for measurement of power rail
        REFCTL0 &= ~REFON;//turn off ref. function
        P5SEL |= VCCTWO +POWER_RAIL_MEASUREMENT_PIN;
+
+       if(P6IN & IO2)
+       {
+    	   saveBatteryTimerEnabled = 0;
+       }
+       if(saveBatteryTimerEnabled==0)
+       {
+    	   saveBatteryLEDIndicatorCounter = SAVE_BATTERY_LED_COUNTER_MAX_VALUE;
+    	   //no action will be taken to check activity on analog inputs
+    	   powerWatchDogTimerCounter = 0;
+       }
+       else
+       {
+
+    	   powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
+       }
+
 
 
        __enable_interrupt();  // Enable interrupts globally
@@ -856,6 +883,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 
 
+
 	//--------------------------------------------------------------------------------------------
 
 
@@ -971,6 +999,23 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 	}
 
 	lastEncoderVoltage = currentEncoderVoltage;
+
+
+	//------------------------ POWER SAVE INDICATION --------------------------------------------
+		if(saveBatteryLEDIndicatorCounter>0)
+		{
+			saveBatteryLEDIndicatorCounter--;
+			if (saveBatteryLEDIndicatorCounter==0)
+			{
+				P4OUT &=  ~(BLUE_LED);
+			}
+			else
+			{
+				P4OUT |=  BLUE_LED;
+				P1OUT &=  ~(RED_LED);
+				P4OUT &=  ~(GREEN_LED);
+			}
+		}
 
 
 	//--------------------- BOARD EXECUTION -------------------------------
@@ -1126,9 +1171,9 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 	//========== ADC code ======================
 
-	if(sampleData == 1 && circularBufferLocked ==0)
+	if(circularBufferLocked ==0)
 	{
-
+		    resetPowerWatchDogTimerCounter = 0;
 			tempIndex = head;//remember position of begining of frame to put flag bit
 			tempADCresult = ADC12MEM0;
 			//correct DC offset
@@ -1145,18 +1190,33 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 				tempADCresult = tempADCresult - correctionVccOverTwo;
 			}
 
-			circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-			difference++;
-			if(head==MEGA_DATA_LENGTH)
+			if(powerWatchDogTimerCounter>0)
 			{
-				head = 0;
+				if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+				{
+					resetPowerWatchDogTimerCounter = 1;
+				}
 			}
-			circularBuffer[head++] = (0x7Fu & tempADCresult);
-			difference++;
-			if(head==MEGA_DATA_LENGTH)
+
+
+			if(sampleData == 1)
 			{
-				head = 0;
+				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+				difference++;
+				if(head==MEGA_DATA_LENGTH)
+				{
+					head = 0;
+				}
+				circularBuffer[head++] = (0x7Fu & tempADCresult);
+				difference++;
+				if(head==MEGA_DATA_LENGTH)
+				{
+					head = 0;
+				}
 			}
+
+
+
 			tempADCresult = ADC12MEM1;
 
 			//correct DC offset
@@ -1173,19 +1233,31 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 				tempADCresult = tempADCresult - correctionVccOverTwo;
 			}
 
-			circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-			difference++;
-			if(head==MEGA_DATA_LENGTH)
+
+
+			if(powerWatchDogTimerCounter>0)
 			{
-				head = 0;
-			}
-			circularBuffer[head++] = (0x7Fu & tempADCresult);
-			difference++;
-			if(head==MEGA_DATA_LENGTH)
-			{
-				head = 0;
+				if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+				{
+					resetPowerWatchDogTimerCounter = 1;
+				}
 			}
 
+			if(sampleData == 1)
+			{
+				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+				difference++;
+				if(head==MEGA_DATA_LENGTH)
+				{
+					head = 0;
+				}
+				circularBuffer[head++] = (0x7Fu & tempADCresult);
+				difference++;
+				if(head==MEGA_DATA_LENGTH)
+				{
+					head = 0;
+				}
+			}
 			if(numberOfChannels>2)
 			{
 				tempADCresult = ADC12MEM2;
@@ -1204,17 +1276,29 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 					tempADCresult = tempADCresult - correctionVccOverTwo;
 				}
 
-				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
+
+				if(powerWatchDogTimerCounter>0)
 				{
-					head = 0;
+					if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+					{
+						resetPowerWatchDogTimerCounter = 1;
+					}
 				}
-				circularBuffer[head++] = (0x7Fu & tempADCresult);
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
+
+				if(sampleData == 1)
 				{
-					head = 0;
+					circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+					difference++;
+					if(head==MEGA_DATA_LENGTH)
+					{
+						head = 0;
+					}
+					circularBuffer[head++] = (0x7Fu & tempADCresult);
+					difference++;
+					if(head==MEGA_DATA_LENGTH)
+					{
+						head = 0;
+					}
 				}
 
 				tempADCresult = ADC12MEM3;
@@ -1233,23 +1317,42 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 					tempADCresult = tempADCresult - correctionVccOverTwo;
 				}
 
-
-				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
+				if(powerWatchDogTimerCounter>0)
 				{
-					head = 0;
+					if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+					{
+						resetPowerWatchDogTimerCounter = 1;
+					}
 				}
-				circularBuffer[head++] = (0x7Fu & tempADCresult);
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
+
+				if(sampleData == 1)
 				{
-					head = 0;
+
+
+					circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+					difference++;
+					if(head==MEGA_DATA_LENGTH)
+					{
+						head = 0;
+					}
+					circularBuffer[head++] = (0x7Fu & tempADCresult);
+					difference++;
+					if(head==MEGA_DATA_LENGTH)
+					{
+						head = 0;
+					}
 				}
 
 			}
 
 			circularBuffer[tempIndex] |= BIT7;//put flag for begining of frame
+
+			if(resetPowerWatchDogTimerCounter==1)
+			{
+				powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
+			}
+
+
 
 
 	}
@@ -1257,6 +1360,26 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 	{
 		tempADCresult = ADC12MEM0;
 		tempADCresult = ADC12MEM1;
+	}
+	if(powerWatchDogTimerCounter>0)
+	{
+		powerWatchDogTimerCounter--;
+		if(powerWatchDogTimerCounter==0)
+		{
+			//put MSP to sleep, disable voltage regulator
+			P1OUT &=  ~(POWER_ENABLE);
+			P1OUT &=  ~(RED_LED);
+			P4OUT &=  ~(GREEN_LED);
+			P4OUT &=  ~(BLUE_LED);
+			USB_disconnect();
+			USB_disable();
+			__disable_interrupt();
+			//enter low power mode
+			  PMMCTL0_H = PMMPW_H;                      // open PMM
+			  PMMCTL0_L |= PMMREGOFF;                   // set Flag to enter LPM4.5 with LPM4 request
+			  LPM4;
+			  __no_operation();// now enter LPM4.5
+		}
 	}
 //Uncomment this when not using repeat of sequence
 	ADC12CTL0 &= ~ADC12SC;
