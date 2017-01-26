@@ -1,10 +1,11 @@
 /* --COPYRIGHT--
  *
  *  Backyard Brains 2015
- *  Build 008
+ *  Build 1.02
  *
  *  This version has power rail detection and it responds on message about power state.
  *  It works with active HIGH RGB LED
+ *  It has power OFF timer
  *  Stanislav Mircic 26 Sep 2016
  * ======== main.c ========
  */
