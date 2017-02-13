@@ -57,8 +57,8 @@ extern "C"
 
 // Configuration Constants that can change
 // #define that relates to Device Descriptor
-#define USB_VID               0x2047        // Vendor ID (VID)
-#define USB_PID               0x03e0        // Product ID (PID)
+#define USB_VID              0x2E73 //0x2E73 - BYB VID             0x2047 - TI  Vendor ID (VID)
+#define USB_PID              0x1 //0x1 - Muscle SpikerBox Pro PID  0x03e0 - TI test Product ID (PID)
 /*----------------------------------------------------------------------------+
 | Firmware Version                                                            |
 | How to detect version number of the FW running on MSP430?                   |
