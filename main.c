@@ -27,7 +27,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.03"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.05"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -44,6 +44,7 @@
 
 #define TEN_K_SAMPLE_RATE 1600
 #define HALF_SAMPLE_RATE 3200
+#define POWER_SAVE_MODE_PERIOD 65000
 
 
 #define LOW_RAIL_VOLTAGE_FIRST_HIGH 840
@@ -142,10 +143,12 @@ unsigned int saveBatteryTimerEnabled = 1;
 #define SAVE_BATTERY_LED_COUNTER_MAX_VALUE 50000
 //5 seconds indication blue LED timer
 unsigned int saveBatteryLEDIndicatorCounter = 0;
-#define POWER_WATCH_DOG_TIMER_MAX_VALUE 18000000
+#define POWER_WATCH_DOG_TIMER_MAX_VALUE 18000000 //1sec = 10000 30min = 18000000
 long powerWatchDogTimerCounter = 0;
 unsigned int resetPowerWatchDogTimerCounter = 0;
 #define THRESHOLD_FOR_POWER_SAVING 574 //(1.85/3.3)*1023
+unsigned int weAreInPowerSaveMode = 0;
+unsigned int counterForBlinkingLedPowerSave = 0;
 
 //flag to start BSL
 unsigned int enterTheBSL = 0;
@@ -261,6 +264,14 @@ void main (void)
        while (1)
        {
 
+    	   if(weAreInPowerSaveMode==1)
+    	   {
+    		   while(1)
+    		   {
+    			   __no_operation();
+    		   }
+
+    	   }
     	   if(enterTheBSL)//if we should update firmware
     	   {
     		   	   USB_disconnect(); //disconnect from USB and enable BSL to enumerate again
@@ -709,6 +720,36 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 #error Compiler not found!
 #endif
 {
+
+	if(weAreInPowerSaveMode==1)
+	{
+
+		counterForBlinkingLedPowerSave++;
+		if(counterForBlinkingLedPowerSave<2200)
+		{
+			P1OUT &=  ~(RED_LED);
+		}
+		else if(counterForBlinkingLedPowerSave<2201)
+		{
+			P1OUT |=  RED_LED;
+		}
+		else if(counterForBlinkingLedPowerSave<2209)
+		{
+			P1OUT &=  ~RED_LED;
+		}
+		else if(counterForBlinkingLedPowerSave<2210)
+		{
+			P1OUT |=  RED_LED;
+		}
+		else
+		{
+			P1OUT &=  ~RED_LED;
+			counterForBlinkingLedPowerSave = 0;
+		}
+
+
+		return;
+	}
 	//P4OUT ^= BIT1;
 
 	//P4OUT ^= RELAY_OUTPUT;
@@ -1374,12 +1415,22 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 			P4OUT &=  ~(BLUE_LED);
 			USB_disconnect();
 			USB_disable();
-			__disable_interrupt();
+
+			//disable ADC
+			ADC12CTL0 &=~ADC12ENC;
+			ADC12CTL0 &=~(REFON + ADC12ON);
+			ADC12CTL0 =0;
+
+			TA0CCR0 = POWER_SAVE_MODE_PERIOD;
+			TA0CTL = TASSEL_2+MC_1+TACLR+ID1; // ACLK, count to CCR0 then roll, clear TAR
+			weAreInPowerSaveMode = 1;
+			//__disable_interrupt();
 			//enter low power mode
-			  PMMCTL0_H = PMMPW_H;                      // open PMM
-			  PMMCTL0_L |= PMMREGOFF;                   // set Flag to enter LPM4.5 with LPM4 request
-			  LPM4;
-			  __no_operation();// now enter LPM4.5
+			//  PMMCTL0_H = PMMPW_H;                      // open PMM
+			//  PMMCTL0_L |= PMMREGOFF;                   // set Flag to enter LPM4.5 with LPM4 request
+			//  LPM4;
+			//  __no_operation();// now enter LPM4.5
+			return;
 		}
 	}
 //Uncomment this when not using repeat of sequence
