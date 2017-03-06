@@ -27,7 +27,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.05"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.07"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -725,19 +725,19 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 	{
 
 		counterForBlinkingLedPowerSave++;
-		if(counterForBlinkingLedPowerSave<2200)
+		if(counterForBlinkingLedPowerSave<300)
 		{
 			P1OUT &=  ~(RED_LED);
 		}
-		else if(counterForBlinkingLedPowerSave<2201)
+		else if(counterForBlinkingLedPowerSave<304)
 		{
 			P1OUT |=  RED_LED;
 		}
-		else if(counterForBlinkingLedPowerSave<2209)
+		else if(counterForBlinkingLedPowerSave<313)
 		{
 			P1OUT &=  ~RED_LED;
 		}
-		else if(counterForBlinkingLedPowerSave<2210)
+		else if(counterForBlinkingLedPowerSave<317)
 		{
 			P1OUT |=  RED_LED;
 		}
