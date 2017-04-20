@@ -27,7 +27,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.07"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.08"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -51,8 +51,9 @@
 #define LOW_RAIL_VOLTAGE_FIRST_LOW 822 //2.65V @3.3V
 #define LOW_RAIL_VOLTAGE_SECOND_HIGH 700
 #define LOW_RAIL_VOLTAGE_SECOND_LOW 682 //2.2V @3.3V
-#define BATERY_DEATH_VOLTAGE_HIGH 530
+#define BATERY_DEATH_VOLTAGE_HIGH 580
 #define BATERY_DEATH_VOLTAGE_LOW 490 //1V @2.6
+
 
 
 #define POWER_MODE_SOLID_GREEN 0
@@ -848,7 +849,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 				{
 						if(powerMode == POWER_MODE_SOLID_RED)
 						{
-							//do nothing it is in POWER_MODE_SOLID_GREEN
+							//do nothing it is in POWER_MODE_SOLID_RED
 						}
 						else
 						{
@@ -857,28 +858,31 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 				}
 				else
 				{
-					if(tempADCresult>=BATERY_DEATH_VOLTAGE_HIGH) //LOW_RAIL_VOLTAGE_SECOND_LOW > X > BATERY_DEATH_VOLTAGE_HIGH
+					if(powerMode != POWER_MODE_LEDS_OFF)//once in POWER_MODE_LEDS_OFF do not exit untill voltage is way beyond
 					{
-						powerMode = POWER_MODE_BLINKING_RED;
-					}
-					else
-					{
+							if(tempADCresult>=BATERY_DEATH_VOLTAGE_HIGH) //LOW_RAIL_VOLTAGE_SECOND_LOW > X > BATERY_DEATH_VOLTAGE_HIGH
+							{
+								powerMode = POWER_MODE_BLINKING_RED;
+							}
+							else
+							{
 
-						if(tempADCresult>=BATERY_DEATH_VOLTAGE_LOW)  //BATERY_DEATH_VOLTAGE_HIGH > X > BATERY_DEATH_VOLTAGE_LOW
-						{
-								if(powerMode == POWER_MODE_BLINKING_RED)
+								if(tempADCresult>=BATERY_DEATH_VOLTAGE_LOW)  //BATERY_DEATH_VOLTAGE_HIGH > X > BATERY_DEATH_VOLTAGE_LOW
 								{
-									//do nothing it is in POWER_MODE_SOLID_GREEN
+										if(powerMode == POWER_MODE_BLINKING_RED)
+										{
+											//do nothing it is in POWER_MODE_BLINKING_RED
+										}
+										else
+										{
+											powerMode = POWER_MODE_LEDS_OFF;
+										}
 								}
-								else
+								else                                     //BATERY_DEATH_VOLTAGE_LOW > X
 								{
 									powerMode = POWER_MODE_LEDS_OFF;
 								}
-						}
-						else                                     //BATERY_DEATH_VOLTAGE_LOW > X
-						{
-							powerMode = POWER_MODE_LEDS_OFF;
-						}
+							}
 					}
 
 				}
