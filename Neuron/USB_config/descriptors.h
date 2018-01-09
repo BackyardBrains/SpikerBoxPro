@@ -58,7 +58,7 @@ extern "C"
 // Configuration Constants that can change
 // #define that relates to Device Descriptor
 #define USB_VID              0x2E73 //0x2E73 - BYB VID             0x2047 - TI  Vendor ID (VID)
-#define USB_PID              0x1 //0x1 - Muscle SpikerBox Pro PID  0x03e0 - TI test Product ID (PID)
+#define USB_PID              0x2 //0x2 - Neuron SpikerBox Pro PID  0x03e0 - TI test Product ID (PID)
 /*----------------------------------------------------------------------------+
 | Firmware Version                                                            |
 | How to detect version number of the FW running on MSP430?                   |
@@ -66,7 +66,7 @@ extern "C"
 |         Msp430->ApplicationUART->Details                                    |
 +----------------------------------------------------------------------------*/
 #define VER_FW_H              0x01          // Device release number, in binary-coded decimal
-#define VER_FW_L              0x00          // Device release number, in binary-coded decimal
+#define VER_FW_L              0x08          // Device release number, in binary-coded decimal
 // If a serial number is to be reported, set this to the index within the string descriptor
 //of the dummy serial number string.  It will then be automatically handled by the API.
 // If no serial number is to be reported, set this to 0.

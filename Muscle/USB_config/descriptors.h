@@ -66,7 +66,7 @@ extern "C"
 |         Msp430->ApplicationUART->Details                                    |
 +----------------------------------------------------------------------------*/
 #define VER_FW_H              0x01          // Device release number, in binary-coded decimal
-#define VER_FW_L              0x00          // Device release number, in binary-coded decimal
+#define VER_FW_L              0x08          // Device release number, in binary-coded decimal
 // If a serial number is to be reported, set this to the index within the string descriptor
 //of the dummy serial number string.  It will then be automatically handled by the API.
 // If no serial number is to be reported, set this to 0.
