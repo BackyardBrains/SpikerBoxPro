@@ -7,7 +7,7 @@ http://www.ti.com/tool/msp430usbdevpack
 
 Firmware is made for a Texas Instruments MSP430f5522 controler. Controller is doing an aquisition of bioelectric signals, sends data through HID USB to host computer and controlls hardware I/O interface made for SpikerBox Pro expansion boards. 
 
-Details of V0.09 firmware for SpikerBox Pro (Neuron and Muscle)
+Details of V1.09 firmware for SpikerBox Pro (Neuron and Muscle)
 
 - samples 2 channels (A0, A1) at 10kHz with 10 bits resolution
 - sends data in real time via HID datapype device class USB endpoint
@@ -21,10 +21,10 @@ Details of V0.09 firmware for SpikerBox Pro (Neuron and Muscle)
       - sends information about type of device connected to hardware I/O interface
       
  Detailed explanation of messages and communication protocol can be found in:
- ([Guide for implementation of Host software for SpikerBox HID USB device](documentation/SpikeRecorderHIDspecification.pdf))
+ ([Guide for implementation of Host software for SpikerBox HID USB device](muscle/documentation/SpikeRecorderHIDspecification.pdf))
 - controls hardware I/O interface that enables additional 2 analog channels and up to 5 digital inputs for
    triggering of events. Details on I/O interface can be found in:
-   ([SpikerBox Pro Hardware SDK](documentation/SpikerBoxProHardwareSDK.pdf))
+   ([SpikerBox Pro Hardware SDK](muscle/documentation/SpikerBoxProHardwareSDK.pdf))
 - mesure state of power rail and controls power indicator RGB LED.
  
 
