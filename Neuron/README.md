@@ -1,4 +1,4 @@
-# Neuron SpikerBoxPro
+# Neuron SpikerBox Pro
 
 Code Composer project for Neuron SpikerBox Pro firmware made for MSP430f5522. 
 In order to run this you must first install MSP430 USB dev pack that can be found on TI website:
