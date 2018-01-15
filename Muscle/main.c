@@ -28,7 +28,7 @@
 
 //================ Parameters ===================
 #define FIRMWARE_VERSION "1.08"  // firmware version. Try to keep it to 4 characters
-#define HARDWARE_TYPE "NEURONSB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
+#define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
 #define DEBOUNCE_TIME 2000
