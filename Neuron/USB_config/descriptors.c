@@ -152,12 +152,10 @@ uint8_t const abromStringDescriptor[] = {
     'n',0x00,'s',0x00,
 
     // String index2, Product
-    28,        // Length of this string descriptor
+    22,        // Length of this string descriptor
     3,        // bDescriptorType
-    'S',0x00,'p',0x00,'i',0x00,'k',0x00,'e',0x00,'R',0x00,
-    'e',0x00,'c',0x00,'o',0x00,'r',0x00,'d',0x00,'e',0x00,
-    'r',0x00,
-
+    'N',0x00,'e',0x00,'u',0x00,'r',0x00,'o',0x00,'n',0x00,
+    ' ',0x00,'P',0x00,'r',0x00,'o',0x00,
     // String index3, Serial Number
     4,        // Length of this string descriptor
     3,        // bDescriptorType
