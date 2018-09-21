@@ -39,7 +39,7 @@
 #define OPERATION_MODE_DEFAULT 0
 #define OPERATION_MODE_BNC 1
 #define OPERATION_MODE_FIVE_DIGITAL 2
-#define OPERATION_MODE_ARDUINO_BOARD 3
+#define OPERATION_MODE_HAMMER 3
 #define OPERATION_MODE_MORE_ANALOG 4
 
 #define TEN_K_SAMPLE_RATE 1600
@@ -418,13 +418,25 @@ void setupOperationMode(void)
 			//defaultSetupADC();
 		break;
 		case OPERATION_MODE_FIVE_DIGITAL:
-		case OPERATION_MODE_ARDUINO_BOARD:
 			TA0CCR0 = TEN_K_SAMPLE_RATE;
 			numberOfChannels = 2;
 			P6SEL = BIT0+BIT1+BIT7;//select analog inputs
 			//set all to inputs
 			P6DIR = 0;
 			P6REN = ~(BIT0+BIT1+BIT7);
+			P6OUT = 0;//put output register to zero
+
+			P4OUT &= ~(RELAY_OUTPUT);
+			//default setup of ADC, redefines part of Port 6 pins
+			//defaultSetupADC();
+			break;
+		case OPERATION_MODE_HAMMER:
+			TA0CCR0 = HALF_SAMPLE_RATE;
+			numberOfChannels = 3;
+			P6SEL = BIT0+BIT1+IO5+BIT7;//select analog inputs
+			//set all to inputs
+			P6DIR = 0;
+			P6REN = ~(BIT0+BIT1+IO5+BIT7);
 			P6OUT = 0;//put output register to zero
 
 			P4OUT &= ~(RELAY_OUTPUT);
@@ -558,7 +570,7 @@ void executeCommand(char * command)
 	   		case OPERATION_MODE_FIVE_DIGITAL:
 	   			sendStringWithEscapeSequence("BRD:3;");
 	   		break;
-	   		case OPERATION_MODE_ARDUINO_BOARD:
+	   		case OPERATION_MODE_HAMMER:
 				sendStringWithEscapeSequence("BRD:4;");
 			break;
 	   		case OPERATION_MODE_MORE_ANALOG:
@@ -1024,9 +1036,9 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 		else if((currentEncoderVoltage >= 620) && (currentEncoderVoltage < 775))
 		{
 			//forth board
-			if(operationMode != OPERATION_MODE_ARDUINO_BOARD)
+			if(operationMode != OPERATION_MODE_HAMMER)
 			{
-				operationMode = OPERATION_MODE_ARDUINO_BOARD;
+				operationMode = OPERATION_MODE_HAMMER;
 				sendStringWithEscapeSequence("BRD:4;");
 				setupOperationMode();
 
@@ -1072,35 +1084,10 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 			case OPERATION_MODE_DEFAULT:
 			case OPERATION_MODE_FIVE_DIGITAL:
-			case OPERATION_MODE_ARDUINO_BOARD:
+
 				//two additional digital inputs
 
-				//================= EVENT 4 code ======================
 
-				if(debounceTimer4>0)
-				{
-					debounceTimer4 = debounceTimer4 -1;
-				}
-				else
-				{
-					if(eventEnabled4>0)
-					{
-							if(P6IN & IO4)
-							{
-									eventEnabled4 = 0;
-									debounceTimer4 = DEBOUNCE_TIME;
-									sendStringWithEscapeSequence("EVNT:4;");
-							}
-					}
-					else
-					{
-						if(!(P6IN & IO4))
-						{
-							eventEnabled4 = 1;
-						}
-
-					}
-				}
 
 				//================= EVENT 5 code ======================
 
@@ -1124,6 +1111,35 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 						if(!(P6IN & IO5))
 						{
 							eventEnabled5 = 1;
+						}
+
+					}
+				}
+
+
+			case OPERATION_MODE_HAMMER:
+
+				//================= EVENT 4 code ======================
+				if(debounceTimer4>0)
+				{
+					debounceTimer4 = debounceTimer4 -1;
+				}
+				else
+				{
+					if(eventEnabled4>0)
+					{
+							if(P6IN & IO4)
+							{
+									eventEnabled4 = 0;
+									debounceTimer4 = DEBOUNCE_TIME;
+									sendStringWithEscapeSequence("EVNT:4;");
+							}
+					}
+					else
+					{
+						if(!(P6IN & IO4))
+						{
+							eventEnabled4 = 1;
 						}
 
 					}
@@ -1304,7 +1320,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 					head = 0;
 				}
 			}
-			if(numberOfChannels>2)
+			if(numberOfChannels>3)
 			{
 				tempADCresult = ADC12MEM2;
 
@@ -1347,47 +1363,51 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 					}
 				}
 
-				tempADCresult = ADC12MEM3;
 
-				//correct DC offset
-				if((int)tempADCresult<correctionVccOverTwo)
-				{
-					tempADCresult = 0;
-				}
-				else if(tempCorrectionVariable<tempADCresult)
-				{
-						tempADCresult = 1023;
-				}
-				else
-				{
-					tempADCresult = tempADCresult - correctionVccOverTwo;
-				}
+			}
+			if(numberOfChannels>2)
+			{
+					tempADCresult = ADC12MEM3;
 
-				if(powerWatchDogTimerCounter>0)
-				{
-					if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+					//correct DC offset
+					if((int)tempADCresult<correctionVccOverTwo)
 					{
-						resetPowerWatchDogTimerCounter = 1;
+						tempADCresult = 0;
 					}
-				}
-
-				if(sampleData == 1)
-				{
-
-
-					circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
+					else if(tempCorrectionVariable<tempADCresult)
 					{
-						head = 0;
+							tempADCresult = 1023;
 					}
-					circularBuffer[head++] = (0x7Fu & tempADCresult);
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
+					else
 					{
-						head = 0;
+						tempADCresult = tempADCresult - correctionVccOverTwo;
 					}
-				}
+
+					if(powerWatchDogTimerCounter>0)
+					{
+						if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+						{
+							resetPowerWatchDogTimerCounter = 1;
+						}
+					}
+
+					if(sampleData == 1)
+					{
+
+
+						circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+						difference++;
+						if(head==MEGA_DATA_LENGTH)
+						{
+							head = 0;
+						}
+						circularBuffer[head++] = (0x7Fu & tempADCresult);
+						difference++;
+						if(head==MEGA_DATA_LENGTH)
+						{
+							head = 0;
+						}
+					}
 
 			}
 
