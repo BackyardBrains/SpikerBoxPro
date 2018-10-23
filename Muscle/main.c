@@ -27,7 +27,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.10"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.11"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "MUSCLESB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -41,6 +41,7 @@
 #define OPERATION_MODE_FIVE_DIGITAL 2
 #define OPERATION_MODE_HAMMER 3
 #define OPERATION_MODE_MORE_ANALOG 4
+#define OPERATION_MODE_JOYSTICK 5
 
 #define TEN_K_SAMPLE_RATE 1600
 #define HALF_SAMPLE_RATE 3200
@@ -101,9 +102,12 @@ volatile uint16_t rounds = 0;
 char outString[32];
 char pakOutString[16];
 
+
+
 char *commandDeimiter = ";";
 char *parameterDeimiter = ":";
 
+char joystickMessage[8];
 
 
 #define MEGA_DATA_LENGTH 2048//992
@@ -178,6 +182,20 @@ unsigned int sampleData = 0;
 
 #define BOARD_DETECTION_TIMER_MAX_VALUE 15000 //1.5 sec
 
+
+uint8_t TX_joystick_buffer = 0;
+uint8_t RX_joystick_buffer = 0;
+uint8_t last_joystick_state = 0;
+uint8_t new_joystick_state = 0;
+#define BITS_BETWEEN_TWO_SERIAL 18
+#define SAMPLES_FOR_ONE_BIT 16
+#define HALF_SAMPLES_FOR_ONE_BIT 8
+uint8_t bits_counter = BITS_BETWEEN_TWO_SERIAL;
+uint8_t one_bit_counter = SAMPLES_FOR_ONE_BIT;
+uint8_t lastReceivedButtons = 0;
+uint8_t sendJoystickMessage = 0;
+uint16_t ledCounters[8];
+#define MAX_LED_COUNTER_TIME 1000
 
 void defaultSetupADC();
 void setupPeriodicTimer();
@@ -260,6 +278,26 @@ void main (void)
 
 
 
+       joystickMessage[0]= 'J';
+       joystickMessage[1]= 'O';
+       joystickMessage[2]= 'Y';
+       joystickMessage[3]= ':';
+       joystickMessage[4]= 240;//11110000 - since we want to avoid sending zero because issue with zero
+       joystickMessage[5]= 240;//11110000 - terminated strings we will divide one byte to two bytes and use just 4 LSB
+       joystickMessage[6]= ';';
+       joystickMessage[7]= 0;
+
+
+       ledCounters[0] = 0;
+       ledCounters[1] = 0;
+       ledCounters[2] = 0;
+       ledCounters[3] = 0;
+       ledCounters[4] = 0;
+       ledCounters[5] = 0;
+       ledCounters[6] = 0;
+       ledCounters[7] = 0;
+
+
        __enable_interrupt();  // Enable interrupts globally
 
        while (1)
@@ -287,6 +325,12 @@ void main (void)
 			   // host, enumerated, and communication is active. Never enter LPM3/4/5
 			   // in this mode; the MCU must be active or LPM0 during USB communication
                case ST_ENUM_ACTIVE:
+
+            	   if(sendJoystickMessage)
+            	   {
+            		   sendJoystickMessage = 0;
+            		   sendStringWithEscapeSequence(joystickMessage);
+            	   }
 
             	   //--------- receiving
             	   if(bHIDDataReceived_event)
@@ -430,6 +474,17 @@ void setupOperationMode(void)
 			//default setup of ADC, redefines part of Port 6 pins
 			//defaultSetupADC();
 			break;
+		case OPERATION_MODE_JOYSTICK:
+			TA0CCR0 = HALF_SAMPLE_RATE;
+			numberOfChannels = 3;
+			P6SEL = BIT0+BIT1+IO5+BIT7;//select analog inputs
+			//set all to inputs
+			P6DIR = IO1+IO2;
+			P6REN = ~(BIT0+BIT1+ IO1+IO2+IO5+BIT7);
+			P6OUT = 0;//put output register to zero
+
+			P4OUT &= ~(RELAY_OUTPUT);
+			break;
 		case OPERATION_MODE_HAMMER:
 			TA0CCR0 = HALF_SAMPLE_RATE;
 			numberOfChannels = 3;
@@ -498,6 +553,19 @@ void executeCommand(char * command)
 	 //  TA0CCTL0 &= ~CCIE;
 	   sampleData = 0;
 	  // P4OUT &= ~(RED_LED); //commented because to new 3 color LED
+	   return;
+   }
+   else if (!(strcmp(parameter, "ledon")))
+   {
+	   //jump one after "ledon:"
+	   int indexOfLedToLightUp = command[6]-48;//get index of led from ASCII to int
+	   //TX_joystick_buffer |= 0x1<<indexOfLedToLightUp;
+	   ledCounters[indexOfLedToLightUp] = MAX_LED_COUNTER_TIME;
+	   return;
+   }
+   else if (!(strcmp(parameter, "leds")))
+   {
+
 	   return;
    }
    else if (!(strcmp(parameter, "?"))){//get parameters of MSP
@@ -572,6 +640,9 @@ void executeCommand(char * command)
 	   		break;
 	   		case OPERATION_MODE_HAMMER:
 				sendStringWithEscapeSequence("BRD:4;");
+			break;
+	   		case OPERATION_MODE_JOYSTICK:
+				sendStringWithEscapeSequence("BRD:5;");
 			break;
 	   		case OPERATION_MODE_MORE_ANALOG:
 	   			sendStringWithEscapeSequence("BRD:1;");
@@ -762,6 +833,144 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 
 
 		return;
+	}
+	if(operationMode==OPERATION_MODE_JOYSTICK)
+	{
+
+		if(ledCounters[0]==0)
+		{
+			TX_joystick_buffer &=0xFE;
+		}
+		else
+		{
+			ledCounters[0]--;
+			TX_joystick_buffer |=0x01;
+		}
+
+		if(ledCounters[1]==0)
+		{
+			TX_joystick_buffer &=0xFD;
+		}
+		else
+		{
+			ledCounters[1]--;
+			TX_joystick_buffer |=0x02;
+		}
+
+		if(ledCounters[2]==0)
+		{
+			TX_joystick_buffer &=0xFB;
+		}
+		else
+		{
+			ledCounters[2]--;
+			TX_joystick_buffer |=0x04;
+		}
+
+
+		if(ledCounters[3]==0)
+		{
+			TX_joystick_buffer &=0xF7;
+		}
+		else
+		{
+			ledCounters[3]--;
+			TX_joystick_buffer |=0x08;
+		}
+
+		if(ledCounters[4]==0)
+		{
+			TX_joystick_buffer &=0xEF;
+		}
+		else
+		{
+			ledCounters[4]--;
+			TX_joystick_buffer |=0x10;
+		}
+
+		if(ledCounters[5]==0)
+		{
+			TX_joystick_buffer &=0xDF;
+		}
+		else
+		{
+			ledCounters[5]--;
+			TX_joystick_buffer |=0x20;
+		}
+
+		if(ledCounters[6]==0)
+		{
+			TX_joystick_buffer &=0xBF;
+		}
+		else
+		{
+			ledCounters[6]--;
+			TX_joystick_buffer |=0x40;
+		}
+
+		if(ledCounters[7]==0)
+		{
+			TX_joystick_buffer &=0x7F;
+		}
+		else
+		{
+			ledCounters[7]--;
+			TX_joystick_buffer |=0x80;
+		}
+
+
+		one_bit_counter--;
+		if(one_bit_counter == HALF_SAMPLES_FOR_ONE_BIT)
+		{
+
+				P6OUT &= ~(IO1);
+				if(bits_counter<8)
+				{
+					RX_joystick_buffer = RX_joystick_buffer<<1;
+					if(P6IN & IO3)
+					{
+						RX_joystick_buffer++;
+						ledCounters[bits_counter] = MAX_LED_COUNTER_TIME;
+					}
+
+				}
+
+				if(bits_counter==0)
+				{
+					bits_counter = BITS_BETWEEN_TWO_SERIAL;
+					//TX_joystick_buffer = RX_joystick_buffer;
+					if(RX_joystick_buffer != lastReceivedButtons)
+					{
+						joystickMessage[4] = 0xF0;
+						joystickMessage[4] |= RX_joystick_buffer & 0x0F;
+						joystickMessage[5] = 0xF0;
+						joystickMessage[5] |= (RX_joystick_buffer>>4) & 0x0F;
+						sendJoystickMessage = 1;
+					}
+					lastReceivedButtons = RX_joystick_buffer;
+				}
+		}
+		if(one_bit_counter==0)
+		{
+			bits_counter--;
+			if(bits_counter<8)
+			{
+
+				if((TX_joystick_buffer>>bits_counter) & 1)
+				{
+					P6OUT |= IO2;
+				}
+				else
+				{
+					P6OUT &= ~IO2;
+				}
+				P6OUT |= IO1;
+			}
+
+			one_bit_counter = SAMPLES_FOR_ONE_BIT;
+
+		}
+
 	}
 	//P4OUT ^= BIT1;
 
@@ -1048,6 +1257,13 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 		{
 			//fifth board
 
+			if(operationMode != OPERATION_MODE_JOYSTICK)
+			{
+				operationMode = OPERATION_MODE_JOYSTICK;
+				sendStringWithEscapeSequence("BRD:5;");
+				setupOperationMode();
+
+			}
 		}
 		else if((currentEncoderVoltage >= 930))
 		{
@@ -1081,7 +1297,9 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 	switch(operationMode)
 		{
+			case OPERATION_MODE_JOYSTICK:
 
+				break;
 			case OPERATION_MODE_DEFAULT:
 			case OPERATION_MODE_FIVE_DIGITAL:
 
@@ -1148,7 +1366,7 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 			case OPERATION_MODE_BNC:
 			case OPERATION_MODE_MORE_ANALOG:
-			default:
+
 				//============== event 1 =================
 
 					if(debounceTimer1>0)
@@ -1228,7 +1446,8 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 
 						}
 					}
-
+			default:
+				//do nothing, that is for joystick
 		}
 
 	//========== ADC code ======================
