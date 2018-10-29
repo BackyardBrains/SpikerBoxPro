@@ -194,7 +194,8 @@ uint8_t bits_counter = BITS_BETWEEN_TWO_SERIAL;
 uint8_t one_bit_counter = SAMPLES_FOR_ONE_BIT;
 uint8_t lastReceivedButtons = 0;
 uint8_t sendJoystickMessage = 0;
-uint16_t ledCounters[8];
+//uint16_t ledCounters[8];
+uint8_t hostJoystickState = 0;
 #define MAX_LED_COUNTER_TIME 1000
 
 void defaultSetupADC();
@@ -287,15 +288,6 @@ void main (void)
        joystickMessage[6]= ';';
        joystickMessage[7]= 0;
 
-
-       ledCounters[0] = 0;
-       ledCounters[1] = 0;
-       ledCounters[2] = 0;
-       ledCounters[3] = 0;
-       ledCounters[4] = 0;
-       ledCounters[5] = 0;
-       ledCounters[6] = 0;
-       ledCounters[7] = 0;
 
 
        __enable_interrupt();  // Enable interrupts globally
@@ -559,13 +551,14 @@ void executeCommand(char * command)
    {
 	   //jump one after "ledon:"
 	   int indexOfLedToLightUp = command[6]-48;//get index of led from ASCII to int
-	   //TX_joystick_buffer |= 0x1<<indexOfLedToLightUp;
-	   ledCounters[indexOfLedToLightUp] = MAX_LED_COUNTER_TIME;
+	   hostJoystickState |= 0x1<<indexOfLedToLightUp;
+	   //ledCounters[indexOfLedToLightUp] = MAX_LED_COUNTER_TIME;
 	   return;
-   }
-   else if (!(strcmp(parameter, "leds")))
+   }//hostJoystickStatea
+   else if (!(strcmp(parameter, "ledoff")))
    {
-
+	   int indexOfLedToLightUp = command[7]-48;//get index of led from ASCII to int
+	  hostJoystickState &= ~(0x1<<indexOfLedToLightUp);
 	   return;
    }
    else if (!(strcmp(parameter, "?"))){//get parameters of MSP
@@ -837,86 +830,6 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 	if(operationMode==OPERATION_MODE_JOYSTICK)
 	{
 
-		if(ledCounters[0]==0)
-		{
-			TX_joystick_buffer &=0xFE;
-		}
-		else
-		{
-			ledCounters[0]--;
-			TX_joystick_buffer |=0x01;
-		}
-
-		if(ledCounters[1]==0)
-		{
-			TX_joystick_buffer &=0xFD;
-		}
-		else
-		{
-			ledCounters[1]--;
-			TX_joystick_buffer |=0x02;
-		}
-
-		if(ledCounters[2]==0)
-		{
-			TX_joystick_buffer &=0xFB;
-		}
-		else
-		{
-			ledCounters[2]--;
-			TX_joystick_buffer |=0x04;
-		}
-
-
-		if(ledCounters[3]==0)
-		{
-			TX_joystick_buffer &=0xF7;
-		}
-		else
-		{
-			ledCounters[3]--;
-			TX_joystick_buffer |=0x08;
-		}
-
-		if(ledCounters[4]==0)
-		{
-			TX_joystick_buffer &=0xEF;
-		}
-		else
-		{
-			ledCounters[4]--;
-			TX_joystick_buffer |=0x10;
-		}
-
-		if(ledCounters[5]==0)
-		{
-			TX_joystick_buffer &=0xDF;
-		}
-		else
-		{
-			ledCounters[5]--;
-			TX_joystick_buffer |=0x20;
-		}
-
-		if(ledCounters[6]==0)
-		{
-			TX_joystick_buffer &=0xBF;
-		}
-		else
-		{
-			ledCounters[6]--;
-			TX_joystick_buffer |=0x40;
-		}
-
-		if(ledCounters[7]==0)
-		{
-			TX_joystick_buffer &=0x7F;
-		}
-		else
-		{
-			ledCounters[7]--;
-			TX_joystick_buffer |=0x80;
-		}
 
 
 		one_bit_counter--;
@@ -930,15 +843,14 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 					if(P6IN & IO3)
 					{
 						RX_joystick_buffer++;
-						ledCounters[bits_counter] = MAX_LED_COUNTER_TIME;
+						//ledCounters[bits_counter] = MAX_LED_COUNTER_TIME;
 					}
-
 				}
 
 				if(bits_counter==0)
 				{
 					bits_counter = BITS_BETWEEN_TWO_SERIAL;
-					//TX_joystick_buffer = RX_joystick_buffer;
+					TX_joystick_buffer = RX_joystick_buffer | hostJoystickState;
 					if(RX_joystick_buffer != lastReceivedButtons)
 					{
 						joystickMessage[4] = 0xF0;
