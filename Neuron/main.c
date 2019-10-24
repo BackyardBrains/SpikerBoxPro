@@ -1,12 +1,12 @@
 /* --COPYRIGHT--
  *
- *  Backyard Brains 2015
- *  Build 1.02
+ *  Backyard Brains 2019
+ *  Build 1.11
  *
  *  This version has power rail detection and it responds on message about power state.
  *  It works with active HIGH RGB LED
  *  It has power OFF timer
- *  Stanislav Mircic 26 Sep 2016
+ *  Stanislav Mircic 24. Oct. 2019
  * ======== main.c ========
  */
 #include <string.h>
@@ -27,7 +27,7 @@
 
 
 //================ Parameters ===================
-#define FIRMWARE_VERSION "1.09"  // firmware version. Try to keep it to 4 characters
+#define FIRMWARE_VERSION "1.11"  // firmware version. Try to keep it to 4 characters
 #define HARDWARE_TYPE "NEURONSB" // hardware type/product. Try not to go over 8 characters (MUSCLESB, NEURONSB)
 #define HARDWARE_VERSION "1.0"  // hardware version. Try to keep it to 4 characters
 #define COMMAND_RESPONSE_LENGTH 35  //16 is just the delimiters etc.
@@ -39,8 +39,9 @@
 #define OPERATION_MODE_DEFAULT 0
 #define OPERATION_MODE_BNC 1
 #define OPERATION_MODE_FIVE_DIGITAL 2
-#define OPERATION_MODE_ARDUINO_BOARD 3
+#define OPERATION_MODE_HAMMER 3
 #define OPERATION_MODE_MORE_ANALOG 4
+#define OPERATION_MODE_JOYSTICK 5
 
 #define TEN_K_SAMPLE_RATE 1600
 #define HALF_SAMPLE_RATE 3200
@@ -101,9 +102,12 @@ volatile uint16_t rounds = 0;
 char outString[32];
 char pakOutString[16];
 
+
+
 char *commandDeimiter = ";";
 char *parameterDeimiter = ":";
 
+char joystickMessage[8];
 
 
 #define MEGA_DATA_LENGTH 2048//992
@@ -179,6 +183,21 @@ unsigned int sampleData = 0;
 #define BOARD_DETECTION_TIMER_MAX_VALUE 15000 //1.5 sec
 
 
+uint8_t TX_joystick_buffer = 0;
+uint8_t RX_joystick_buffer = 0;
+uint8_t last_joystick_state = 0;
+uint8_t new_joystick_state = 0;
+#define BITS_BETWEEN_TWO_SERIAL 18
+#define SAMPLES_FOR_ONE_BIT 16
+#define HALF_SAMPLES_FOR_ONE_BIT 8
+uint8_t bits_counter = BITS_BETWEEN_TWO_SERIAL;
+uint8_t one_bit_counter = SAMPLES_FOR_ONE_BIT;
+uint8_t lastReceivedButtons = 0;
+uint8_t sendJoystickMessage = 0;
+//uint16_t ledCounters[8];
+uint8_t hostJoystickState = 0;
+#define MAX_LED_COUNTER_TIME 1000
+
 void defaultSetupADC();
 void setupPeriodicTimer();
 void sendStringWithEscapeSequence(char * stringToSend);
@@ -230,33 +249,44 @@ void main (void)
 
        //Enable disable powersupply on P1.0
        //Power down blinking LED on P1.1
-	   P1SEL = 0;//digital I/O
-	   P1DIR = RED_LED + POWER_ENABLE;
-	   P1OUT =  POWER_ENABLE;
+       P1SEL = 0;//digital I/O
+       P1DIR = RED_LED + POWER_ENABLE;
+       P1OUT =  POWER_ENABLE;
 
 
 
 
        //set A9 for Vcc/2 reference (for offset correction)
-	   //set A8 for measurement of power rail
+       //set A8 for measurement of power rail
        REFCTL0 &= ~REFON;//turn off ref. function
        P5SEL |= VCCTWO +POWER_RAIL_MEASUREMENT_PIN;
 
        if(P6IN & IO2)
        {
-    	   saveBatteryTimerEnabled = 0;
+           saveBatteryTimerEnabled = 0;
        }
        if(saveBatteryTimerEnabled==0)
        {
-    	   saveBatteryLEDIndicatorCounter = SAVE_BATTERY_LED_COUNTER_MAX_VALUE;
-    	   //no action will be taken to check activity on analog inputs
-    	   powerWatchDogTimerCounter = 0;
+           saveBatteryLEDIndicatorCounter = SAVE_BATTERY_LED_COUNTER_MAX_VALUE;
+           //no action will be taken to check activity on analog inputs
+           powerWatchDogTimerCounter = 0;
        }
        else
        {
 
-    	   powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
+           powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
        }
+
+
+
+       joystickMessage[0]= 'J';
+       joystickMessage[1]= 'O';
+       joystickMessage[2]= 'Y';
+       joystickMessage[3]= ':';
+       joystickMessage[4]= 240;//11110000 - since we want to avoid sending zero because issue with zero
+       joystickMessage[5]= 240;//11110000 - terminated strings we will divide one byte to two bytes and use just 4 LSB
+       joystickMessage[6]= ';';
+       joystickMessage[7]= 0;
 
 
 
@@ -265,96 +295,102 @@ void main (void)
        while (1)
        {
 
-    	   if(weAreInPowerSaveMode==1)
-    	   {
-    		   while(1)
-    		   {
-    			   __no_operation();
-    		   }
+           if(weAreInPowerSaveMode==1)
+           {
+               while(1)
+               {
+                   __no_operation();
+               }
 
-    	   }
-    	   if(enterTheBSL)//if we should update firmware
-    	   {
-    		   	   USB_disconnect(); //disconnect from USB and enable BSL to enumerate again
-    		   	   __disable_interrupt(); // Ensure no application interrupts fire during BSL
-    		   	   ((void (*)())0x1000)(); // This sends execution to the BSL.
-    	   }
+           }
+           if(enterTheBSL)//if we should update firmware
+           {
+                   USB_disconnect(); //disconnect from USB and enable BSL to enumerate again
+                   __disable_interrupt(); // Ensure no application interrupts fire during BSL
+                   ((void (*)())0x1000)(); // This sends execution to the BSL.
+           }
 
 
            switch (USB_connectionState())
            {
-			   // This case is executed while your device is connected to the USB
-			   // host, enumerated, and communication is active. Never enter LPM3/4/5
-			   // in this mode; the MCU must be active or LPM0 during USB communication
+               // This case is executed while your device is connected to the USB
+               // host, enumerated, and communication is active. Never enter LPM3/4/5
+               // in this mode; the MCU must be active or LPM0 during USB communication
                case ST_ENUM_ACTIVE:
 
-            	   //--------- receiving
-            	   if(bHIDDataReceived_event)
-            	   {
+                   if(sendJoystickMessage)
+                   {
+                       sendJoystickMessage = 0;
+                       sendStringWithEscapeSequence(joystickMessage);
+                   }
+
+                   //--------- receiving
+                   if(bHIDDataReceived_event)
+                   {
 
 
-            		   // Holds the new  string
-					   char receivedString[RECEIVE_BUFFER_LENGTH] = "";
-					   char * command1;
-					   char * command2;
-					   char * command3;
+                       // Holds the new  string
+                       char receivedString[RECEIVE_BUFFER_LENGTH] = "";
+                       char * command1;
+                       char * command2;
+                       char * command3;
 
-					   // Add bytes in USB buffer to the string
-					   hidReceiveDataInBuffer((uint8_t*)receivedString,
-						   RECEIVE_BUFFER_LENGTH,
-						   HID0_INTFNUM);
-					   command1 = strtok(receivedString, commandDeimiter);
-					   command2 = strtok(NULL, commandDeimiter);
-					   command3 = strtok(NULL, commandDeimiter);
-					   executeCommand(command1);
-					   executeCommand(command2);
-					   executeCommand(command3);
+                       // Add bytes in USB buffer to the string
+                       hidReceiveDataInBuffer((uint8_t*)receivedString,
+                           RECEIVE_BUFFER_LENGTH,
+                           HID0_INTFNUM);
+                       command1 = strtok(receivedString, commandDeimiter);
+                       command2 = strtok(NULL, commandDeimiter);
+                       command3 = strtok(NULL, commandDeimiter);
+                       executeCommand(command1);
+                       executeCommand(command2);
+                       executeCommand(command3);
 
-            		   bHIDDataReceived_event = FALSE;
+                       bHIDDataReceived_event = FALSE;
 
-            	   }
+                   }
 
-            	   if(difference > generalIndexVar)
-            	   {
-            		   while(difference > generalIndexVar && generalIndexVar<62)
-            		   {
-						   tempSendBuffer[generalIndexVar] = circularBuffer[tail];
-						   generalIndexVar++;
-						   tail++;
-						   if(tail==MEGA_DATA_LENGTH)
-						   {
-							   tail = 0;
-						   }
-					   }
-            	   }
+                   if(difference > generalIndexVar)
+                   {
+                       while(difference > generalIndexVar && generalIndexVar<62)
+                       {
+                           tempSendBuffer[generalIndexVar] = circularBuffer[tail];
+                           generalIndexVar++;
+                           tail++;
+                           if(tail==MEGA_DATA_LENGTH)
+                           {
+                               tail = 0;
+                           }
+                       }
+                   }
 
-            	   // ----------- sending
-            	   if (difference > 61 && bHIDDataSent_event)
-            	   {
+                   // ----------- sending
+                   if (difference > 61 && bHIDDataSent_event)
+                   {
 
-            		   bHIDDataSent_event = FALSE;
+                       bHIDDataSent_event = FALSE;
 
-            		   while(difference > generalIndexVar && generalIndexVar<62)
-					   {
-						   tempSendBuffer[generalIndexVar] = circularBuffer[tail];
-						   generalIndexVar++;
-						   tail++;
-						   if(tail==MEGA_DATA_LENGTH)
-						   {
-							   tail = 0;
-						   }
-					   }
-            		   generalIndexVar = 0;
-            		   difference -=62;
-            		   //103usec
-					   if (hidSendDataInBackground((uint8_t*)tempSendBuffer,62,
-													   HID0_INTFNUM,0))
-					   {
-							   // Operation probably still open; cancel it
-							   USBHID_abortSend(&w,HID0_INTFNUM);
-							   break;
-					   }
-            	   }
+                       while(difference > generalIndexVar && generalIndexVar<62)
+                       {
+                           tempSendBuffer[generalIndexVar] = circularBuffer[tail];
+                           generalIndexVar++;
+                           tail++;
+                           if(tail==MEGA_DATA_LENGTH)
+                           {
+                               tail = 0;
+                           }
+                       }
+                       generalIndexVar = 0;
+                       difference -=62;
+                       //103usec
+                       if (hidSendDataInBackground((uint8_t*)tempSendBuffer,62,
+                                                       HID0_INTFNUM,0))
+                       {
+                               // Operation probably still open; cancel it
+                               USBHID_abortSend(&w,HID0_INTFNUM);
+                               break;
+                       }
+                   }
 
                    break;
 
@@ -366,22 +402,22 @@ void main (void)
                case ST_ENUM_SUSPENDED:// connected/enumerated, but suspended
                case ST_PHYS_CONNECTED_NOENUM_SUSP:// connected, enum started, but host unresponsive
 
-            	   // In this example, for all of these states we enter LPM3. If
-            	   // the host performs a "USB resume" from suspend, the CPU will
-            	   // automatically wake. Other events can also wake the CPU, if
-            	   // their event handlers in eventHandlers.c are configured to return TRUE.
+                   // In this example, for all of these states we enter LPM3. If
+                   // the host performs a "USB resume" from suspend, the CPU will
+                   // automatically wake. Other events can also wake the CPU, if
+                   // their event handlers in eventHandlers.c are configured to return TRUE.
                   // __bis_SR_register(LPM3_bits + GIE);
                   // _NOP();
 
-            	  // TA0CCTL0 &= ~CCIE;//stop timer -> this will stop sampling -> this will stop stream
-            	   //prepare buffer for next connection
-            	   sampleData = 0;
-            	  // P4OUT &= ~(RED_LED); //commented because to new 3 color LED
-            	   head = 0;
-            	   tail = 0;
-            	   difference = 0;
-				   //setup flag in case somebody pull the USB plug while it was sending
-            	   bHIDDataSent_event = TRUE;
+                  // TA0CCTL0 &= ~CCIE;//stop timer -> this will stop sampling -> this will stop stream
+                   //prepare buffer for next connection
+                   sampleData = 0;
+                  // P4OUT &= ~(RED_LED); //commented because to new 3 color LED
+                   head = 0;
+                   tail = 0;
+                   difference = 0;
+                   //setup flag in case somebody pull the USB plug while it was sending
+                   bHIDDataSent_event = TRUE;
                    break;
 
                // The default is executed for the momentary state
@@ -403,72 +439,95 @@ void main (void)
 //
 void setupOperationMode(void)
 {
-	__disable_interrupt();
-	switch(operationMode)
-	{
-		case OPERATION_MODE_BNC:
-			TA0CCR0 = TEN_K_SAMPLE_RATE;
-			numberOfChannels = 2;
-			P6SEL = BIT0+BIT1+BIT7;//analog inputs
-			P6DIR = 0;//select all as inputs
-			P6REN = ~(BIT0+BIT1+BIT7);
-			P6OUT = 0;//put output register to zero
-			P4OUT |= RELAY_OUTPUT;
-			//default setup of ADC, redefines part of Port 6 pins
-			//defaultSetupADC();
-		break;
-		case OPERATION_MODE_FIVE_DIGITAL:
-		case OPERATION_MODE_ARDUINO_BOARD:
-			TA0CCR0 = TEN_K_SAMPLE_RATE;
-			numberOfChannels = 2;
-			P6SEL = BIT0+BIT1+BIT7;//select analog inputs
-			//set all to inputs
-			P6DIR = 0;
-			P6REN = ~(BIT0+BIT1+BIT7);
-			P6OUT = 0;//put output register to zero
+    __disable_interrupt();
+    switch(operationMode)
+    {
+        case OPERATION_MODE_BNC:
+            TA0CCR0 = TEN_K_SAMPLE_RATE;
+            numberOfChannels = 2;
+            P6SEL = BIT0+BIT1+BIT7;//analog inputs
+            P6DIR = 0;//select all as inputs
+            P6REN = ~(BIT0+BIT1+BIT7);
+            P6OUT = 0;//put output register to zero
+            P4OUT |= RELAY_OUTPUT;
+            //default setup of ADC, redefines part of Port 6 pins
+            //defaultSetupADC();
+        break;
+        case OPERATION_MODE_FIVE_DIGITAL:
+            TA0CCR0 = TEN_K_SAMPLE_RATE;
+            numberOfChannels = 2;
+            P6SEL = BIT0+BIT1+BIT7;//select analog inputs
+            //set all to inputs
+            P6DIR = 0;
+            P6REN = ~(BIT0+BIT1+BIT7);
+            P6OUT = 0;//put output register to zero
 
-			P4OUT &= ~(RELAY_OUTPUT);
-			//default setup of ADC, redefines part of Port 6 pins
-			//defaultSetupADC();
-		break;
-		case OPERATION_MODE_MORE_ANALOG:
-			TA0CCR0 = HALF_SAMPLE_RATE;
-			numberOfChannels = 4;
-			//make 4 analog inputs and additional for encoder
-			P6SEL = BIT0+BIT1+IO4+IO5 +BIT7;
-			P6REN = ~(BIT0+BIT1+IO4+IO5 +BIT7);
-			P6OUT = 0;//put output register to zero
-			P4OUT &= ~(RELAY_OUTPUT);
+            P4OUT &= ~(RELAY_OUTPUT);
+            //default setup of ADC, redefines part of Port 6 pins
+            //defaultSetupADC();
+            break;
+        case OPERATION_MODE_JOYSTICK:
+            TA0CCR0 = HALF_SAMPLE_RATE;
+            numberOfChannels = 3;
+            P6SEL = BIT0+BIT1+IO5+BIT7;//select analog inputs
+            //set all to inputs
+            P6DIR = IO1+IO2;
+            P6REN = ~(BIT0+BIT1+ IO1+IO2+IO5+BIT7);
+            P6OUT = 0;//put output register to zero
 
-		break;
-		case OPERATION_MODE_DEFAULT:
-			TA0CCR0 = TEN_K_SAMPLE_RATE;
-			numberOfChannels = 2;
-			P6SEL = BIT0+BIT1+BIT7;//select all pins as digital I/O
-			P6DIR = 0;//select all as inputs
-			P6REN = ~(BIT0+BIT1+BIT7);
-			P6OUT = 0;//put output register to zero
+            P4OUT &= ~(RELAY_OUTPUT);
+            break;
+        case OPERATION_MODE_HAMMER:
+            TA0CCR0 = HALF_SAMPLE_RATE;
+            numberOfChannels = 3;
+            P6SEL = BIT0+BIT1+IO5+BIT7;//select analog inputs
+            //set all to inputs
+            P6DIR = 0;
+            P6REN = ~(BIT0+BIT1+IO5+BIT7);
+            P6OUT = 0;//put output register to zero
 
-			P4OUT &= ~(RELAY_OUTPUT);
-			//default setup of ADC, redefines part of Port 6 pins
-			//defaultSetupADC();
-		break;
-		default:
-			TA0CCR0 = TEN_K_SAMPLE_RATE;
-			numberOfChannels = 2;
-			P6SEL = BIT0+BIT1+BIT7;//select all pins as digital I/O
-			P6DIR = 0;//select all as inputs
-			P6REN = ~(BIT0+BIT1+BIT7);
-			P6OUT = 0;//put output register to zero
+            P4OUT &= ~(RELAY_OUTPUT);
+            //default setup of ADC, redefines part of Port 6 pins
+            //defaultSetupADC();
+        break;
+        case OPERATION_MODE_MORE_ANALOG:
+            TA0CCR0 = HALF_SAMPLE_RATE;
+            numberOfChannels = 4;
+            //make 4 analog inputs and additional for encoder
+            P6SEL = BIT0+BIT1+IO4+IO5 +BIT7;
+            P6REN = ~(BIT0+BIT1+IO4+IO5 +BIT7);
+            P6OUT = 0;//put output register to zero
+            P4OUT &= ~(RELAY_OUTPUT);
 
-			P4OUT &= ~(RELAY_OUTPUT);
-			//default setup of ADC, redefines part of Port 6 pins
-			//defaultSetupADC();
+        break;
+        case OPERATION_MODE_DEFAULT:
+            TA0CCR0 = TEN_K_SAMPLE_RATE;
+            numberOfChannels = 2;
+            P6SEL = BIT0+BIT1+BIT7;//select all pins as digital I/O
+            P6DIR = 0;//select all as inputs
+            P6REN = ~(BIT0+BIT1+BIT7);
+            P6OUT = 0;//put output register to zero
 
-		break;
-	}
+            P4OUT &= ~(RELAY_OUTPUT);
+            //default setup of ADC, redefines part of Port 6 pins
+            //defaultSetupADC();
+        break;
+        default:
+            TA0CCR0 = TEN_K_SAMPLE_RATE;
+            numberOfChannels = 2;
+            P6SEL = BIT0+BIT1+BIT7;//select all pins as digital I/O
+            P6DIR = 0;//select all as inputs
+            P6REN = ~(BIT0+BIT1+BIT7);
+            P6OUT = 0;//put output register to zero
 
-	__enable_interrupt();
+            P4OUT &= ~(RELAY_OUTPUT);
+            //default setup of ADC, redefines part of Port 6 pins
+            //defaultSetupADC();
+
+        break;
+    }
+
+    __enable_interrupt();
 }
 
 
@@ -477,181 +536,198 @@ void setupOperationMode(void)
 //
 void executeCommand(char * command)
 {
-	if(command == NULL)
-	{
-		return;
-	}
+    if(command == NULL)
+    {
+        return;
+    }
    char * parameter = strtok(command, parameterDeimiter);
    if (!(strcmp(parameter, "h"))){//stop
-	 //  TA0CCTL0 &= ~CCIE;
-	   sampleData = 0;
-	  // P4OUT &= ~(RED_LED); //commented because to new 3 color LED
-	   return;
+     //  TA0CCTL0 &= ~CCIE;
+       sampleData = 0;
+      // P4OUT &= ~(RED_LED); //commented because to new 3 color LED
+       return;
+   }
+   else if (!(strcmp(parameter, "ledon")))
+   {
+       //jump one after "ledon:"
+       int indexOfLedToLightUp = command[6]-48;//get index of led from ASCII to int
+       hostJoystickState |= 0x1<<indexOfLedToLightUp;
+       //ledCounters[indexOfLedToLightUp] = MAX_LED_COUNTER_TIME;
+       return;
+   }//hostJoystickStatea
+   else if (!(strcmp(parameter, "ledoff")))
+   {
+       int indexOfLedToLightUp = command[7]-48;//get index of led from ASCII to int
+      hostJoystickState &= ~(0x1<<indexOfLedToLightUp);
+       return;
    }
    else if (!(strcmp(parameter, "?"))){//get parameters of MSP
 
 
-	   char responseString[COMMAND_RESPONSE_LENGTH] = "";
+       char responseString[COMMAND_RESPONSE_LENGTH] = "";
 
-	   strcat(responseString, "FWV:");
-	   strcat(responseString, FIRMWARE_VERSION );
-	   strcat(responseString, ";");
+       strcat(responseString, "FWV:");
+       strcat(responseString, FIRMWARE_VERSION );
+       strcat(responseString, ";");
 
-	   strcat(responseString, "HWT:");
-	   strcat(responseString, HARDWARE_TYPE );
-	   strcat(responseString, ";");
+       strcat(responseString, "HWT:");
+       strcat(responseString, HARDWARE_TYPE );
+       strcat(responseString, ";");
 
-	   strcat(responseString, "HWV:");
-	   strcat(responseString, HARDWARE_VERSION);
-	   strcat(responseString, ";");
+       strcat(responseString, "HWV:");
+       strcat(responseString, HARDWARE_VERSION);
+       strcat(responseString, ";");
 
-	   sendStringWithEscapeSequence(responseString);
+       sendStringWithEscapeSequence(responseString);
 
-	   return;
+       return;
    }
    else if (!(strcmp(parameter, "V"))){//check if power rail is ON or OFF
-	   	   char responseString[COMMAND_RESPONSE_LENGTH] = "";
+           char responseString[COMMAND_RESPONSE_LENGTH] = "";
 
-	   	   if(powerMode == POWER_MODE_LEDS_OFF)//if we are below 1V than 9V rail is off
-	   	   {
-	   		   strcat(responseString, "PWR:0;");
-	   	   }
-	   	   else
-	   	   {
-	   		strcat(responseString, "PWR:1;");
-	   	   }
+           if(powerMode == POWER_MODE_LEDS_OFF)//if we are below 1V than 9V rail is off
+           {
+               strcat(responseString, "PWR:0;");
+           }
+           else
+           {
+            strcat(responseString, "PWR:1;");
+           }
 
-	   	   sendStringWithEscapeSequence(responseString);
+           sendStringWithEscapeSequence(responseString);
 
-	   	   return;
+           return;
    }
    else if (!(strcmp(parameter, "max"))){//get parameters of MSP
 
 
-   	   char responseString[COMMAND_RESPONSE_LENGTH] = "";
+       char responseString[COMMAND_RESPONSE_LENGTH] = "";
 
-   	   strcat(responseString, "MSF:");
-   	   strcat(responseString, MAX_SAMPLE_RATE );
-   	   strcat(responseString, ";");
+       strcat(responseString, "MSF:");
+       strcat(responseString, MAX_SAMPLE_RATE );
+       strcat(responseString, ";");
 
-   	   strcat(responseString, "MNC:");
-   	   strcat(responseString, MAX_NUMBER_OF_CHANNELS );
-   	   strcat(responseString, ";");
+       strcat(responseString, "MNC:");
+       strcat(responseString, MAX_NUMBER_OF_CHANNELS );
+       strcat(responseString, ";");
 
-   	   sendStringWithEscapeSequence(responseString);
+       sendStringWithEscapeSequence(responseString);
 
-   	   return;
+       return;
       }
    else if (!(strcmp(parameter, "start"))){//start sampling
-	   //TA0CCTL0 = CCIE;
-	   sampleData = 1;
-	  // P4OUT |= RED_LED; //commented because to new 3 color LED
-	   return;
+       //TA0CCTL0 = CCIE;
+       sampleData = 1;
+      // P4OUT |= RED_LED; //commented because to new 3 color LED
+       return;
    }
    else if (!(strcmp(parameter, "board"))){//get board type
-   	   //TA0CCTL0 = CCIE;
-	   switch(operationMode)
-	   	{
-	   		case OPERATION_MODE_BNC:
-	   			sendStringWithEscapeSequence("BRD:1;");
-	   		break;
-	   		case OPERATION_MODE_FIVE_DIGITAL:
-	   			sendStringWithEscapeSequence("BRD:3;");
-	   		break;
-	   		case OPERATION_MODE_ARDUINO_BOARD:
-				sendStringWithEscapeSequence("BRD:4;");
-			break;
-	   		case OPERATION_MODE_MORE_ANALOG:
-	   			sendStringWithEscapeSequence("BRD:1;");
-	   		break;
-	   		case OPERATION_MODE_DEFAULT:
-				sendStringWithEscapeSequence("BRD:0;");
-			break;
-	   	}
-   	   return;
+       //TA0CCTL0 = CCIE;
+       switch(operationMode)
+        {
+            case OPERATION_MODE_BNC:
+                sendStringWithEscapeSequence("BRD:1;");
+            break;
+            case OPERATION_MODE_FIVE_DIGITAL:
+                sendStringWithEscapeSequence("BRD:3;");
+            break;
+            case OPERATION_MODE_HAMMER:
+                sendStringWithEscapeSequence("BRD:4;");
+            break;
+            case OPERATION_MODE_JOYSTICK:
+                sendStringWithEscapeSequence("BRD:5;");
+            break;
+            case OPERATION_MODE_MORE_ANALOG:
+                sendStringWithEscapeSequence("BRD:1;");
+            break;
+            case OPERATION_MODE_DEFAULT:
+                sendStringWithEscapeSequence("BRD:0;");
+            break;
+        }
+       return;
       }
    else if (!(strcmp(parameter, "s"))){//sample rate
 
-	   return;
+       return;
    }
    else if (!(strcmp(parameter, "conf s"))){//sample rate
 
-	   return;
+       return;
    }
    else if (!(strcmp(parameter, "c"))){//number of channels
 
-	   return;
+       return;
    }
    else if (!(strcmp(parameter, "update")))
    {
-	   // enter the BSL flag. It will enter in the main loop
-	   enterTheBSL = 1;
+       // enter the BSL flag. It will enter in the main loop
+       enterTheBSL = 1;
    }
 }
 
 
 void sendStringWithEscapeSequence(char * stringToSend)
 {
-	char responseBufferWithEscape[COMMAND_RESPONSE_LENGTH+12] = "";
+    char responseBufferWithEscape[COMMAND_RESPONSE_LENGTH+12] = "";
 
-	//Start of escape sequence
-	responseBufferWithEscape[0] = 255;
-	responseBufferWithEscape[1] = 255;
-	responseBufferWithEscape[2] = 1;
-	responseBufferWithEscape[3] = 1;
-	responseBufferWithEscape[4] = 128;
-	responseBufferWithEscape[5] = 255;
+    //Start of escape sequence
+    responseBufferWithEscape[0] = 255;
+    responseBufferWithEscape[1] = 255;
+    responseBufferWithEscape[2] = 1;
+    responseBufferWithEscape[3] = 1;
+    responseBufferWithEscape[4] = 128;
+    responseBufferWithEscape[5] = 255;
 
 
-	int i = 0;
-	//copy string that we want to send
-	while(stringToSend[i]!=0)
-	{
-		responseBufferWithEscape[i+6] = stringToSend[i]; //copy character
-		i = i+1;
-	}
+    int i = 0;
+    //copy string that we want to send
+    while(stringToSend[i]!=0)
+    {
+        responseBufferWithEscape[i+6] = stringToSend[i]; //copy character
+        i = i+1;
+    }
 
-	//End of escape sequence
-	responseBufferWithEscape[i+6] = 255;
-	responseBufferWithEscape[i+7] = 255;
-	responseBufferWithEscape[i+8] = 1;
-	responseBufferWithEscape[i+9] = 1;
-	responseBufferWithEscape[i+10] = 129;
-	responseBufferWithEscape[i+11] = 255;
+    //End of escape sequence
+    responseBufferWithEscape[i+6] = 255;
+    responseBufferWithEscape[i+7] = 255;
+    responseBufferWithEscape[i+8] = 1;
+    responseBufferWithEscape[i+9] = 1;
+    responseBufferWithEscape[i+10] = 129;
+    responseBufferWithEscape[i+11] = 255;
 
-	int length= i+12;
+    int length= i+12;
 
-	//check if sampling timer is turned ON
-	int weAreSendingSamples = TA0CCTL0 & CCIE;
+    //check if sampling timer is turned ON
+    int weAreSendingSamples = TA0CCTL0 & CCIE;
 
-	circularBufferLocked = 1;
-		//now put it to output buffer/s
-		for(i=0;i<length;i++)
-		{
+    circularBufferLocked = 1;
+        //now put it to output buffer/s
+        for(i=0;i<length;i++)
+        {
 
-					circularBuffer[head++] = responseBufferWithEscape[i];
-					difference++;
-					if(head>=MEGA_DATA_LENGTH)
-					{
-						head = 0;
-					}
-		}
+                    circularBuffer[head++] = responseBufferWithEscape[i];
+                    difference++;
+                    if(head>=MEGA_DATA_LENGTH)
+                    {
+                        head = 0;
+                    }
+        }
 
-		//if we are not sending data than add zeros up to one full frame = 62
-		if(sampleData==0)
-		{
-			for(i=length;i<62;i++)
-			{
-				circularBuffer[head++] = 0;
-				difference++;
-				if(head>=MEGA_DATA_LENGTH)
-				{
-					head = 0;
-				}
-			}
-			difference = 62;
-		}
-		circularBufferLocked = 0;
+        //if we are not sending data than add zeros up to one full frame = 62
+        if(sampleData==0)
+        {
+            for(i=length;i<62;i++)
+            {
+                circularBuffer[head++] = 0;
+                difference++;
+                if(head>=MEGA_DATA_LENGTH)
+                {
+                    head = 0;
+                }
+            }
+            difference = 62;
+        }
+        circularBufferLocked = 0;
 }
 
 
@@ -706,9 +782,9 @@ void sendStringWithEscapeSequence(char * stringToSend)
 
 void setupPeriodicTimer()
 {
-	TA0CCR0 = TEN_K_SAMPLE_RATE;//32768=1sec;
-	TA0CTL = TASSEL_2+MC_1+TACLR; // ACLK, count to CCR0 then roll, clear TAR
-	TA0CCTL0 = CCIE;
+    TA0CCR0 = TEN_K_SAMPLE_RATE;//32768=1sec;
+    TA0CTL = TASSEL_2+MC_1+TACLR; // ACLK, count to CCR0 then roll, clear TAR
+    TA0CCTL0 = CCIE;
 }
 
 
@@ -722,39 +798,96 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 #endif
 {
 
-	if(weAreInPowerSaveMode==1)
-	{
+    if(weAreInPowerSaveMode==1)
+    {
 
-		counterForBlinkingLedPowerSave++;
-		if(counterForBlinkingLedPowerSave<300)
-		{
-			P1OUT &=  ~(RED_LED);
-		}
-		else if(counterForBlinkingLedPowerSave<304)
-		{
-			P1OUT |=  RED_LED;
-		}
-		else if(counterForBlinkingLedPowerSave<313)
-		{
-			P1OUT &=  ~RED_LED;
-		}
-		else if(counterForBlinkingLedPowerSave<317)
-		{
-			P1OUT |=  RED_LED;
-		}
-		else
-		{
-			P1OUT &=  ~RED_LED;
-			counterForBlinkingLedPowerSave = 0;
-		}
+        counterForBlinkingLedPowerSave++;
+        if(counterForBlinkingLedPowerSave<300)
+        {
+            P1OUT &=  ~(RED_LED);
+        }
+        else if(counterForBlinkingLedPowerSave<304)
+        {
+            P1OUT |=  RED_LED;
+        }
+        else if(counterForBlinkingLedPowerSave<313)
+        {
+            P1OUT &=  ~RED_LED;
+        }
+        else if(counterForBlinkingLedPowerSave<317)
+        {
+            P1OUT |=  RED_LED;
+        }
+        else
+        {
+            P1OUT &=  ~RED_LED;
+            counterForBlinkingLedPowerSave = 0;
+        }
 
 
-		return;
-	}
-	//P4OUT ^= BIT1;
+        return;
+    }
+    if(operationMode==OPERATION_MODE_JOYSTICK)
+    {
 
-	//P4OUT ^= RELAY_OUTPUT;
-	ADC12CTL0 |= ADC12ENC + ADC12SC;
+
+
+        one_bit_counter--;
+        if(one_bit_counter == HALF_SAMPLES_FOR_ONE_BIT)
+        {
+
+                P6OUT &= ~(IO1);
+                if(bits_counter<8)
+                {
+                    RX_joystick_buffer = RX_joystick_buffer<<1;
+                    if(P6IN & IO3)
+                    {
+                        RX_joystick_buffer++;
+                        //ledCounters[bits_counter] = MAX_LED_COUNTER_TIME;
+                    }
+                }
+
+                if(bits_counter==0)
+                {
+                    bits_counter = BITS_BETWEEN_TWO_SERIAL;
+                    TX_joystick_buffer = RX_joystick_buffer | hostJoystickState;
+                    if(RX_joystick_buffer != lastReceivedButtons)
+                    {
+                        joystickMessage[4] = 0xF0;
+                        joystickMessage[4] |= RX_joystick_buffer & 0x0F;
+                        joystickMessage[5] = 0xF0;
+                        joystickMessage[5] |= (RX_joystick_buffer>>4) & 0x0F;
+                        sendJoystickMessage = 1;
+                    }
+                    lastReceivedButtons = RX_joystick_buffer;
+                }
+        }
+        if(one_bit_counter==0)
+        {
+            bits_counter--;
+            if(bits_counter<8)
+            {
+
+                if((TX_joystick_buffer>>bits_counter) & 1)
+                {
+                    P6OUT |= IO2;
+                }
+                else
+                {
+                    P6OUT &= ~IO2;
+                }
+                P6OUT |= IO1;
+            }
+
+            one_bit_counter = SAMPLES_FOR_ONE_BIT;
+
+        }
+
+    }
+    //P4OUT ^= BIT1;
+
+    //P4OUT ^= RELAY_OUTPUT;
+    ADC12CTL0 |= ADC12ENC + ADC12SC;
     //__bic_SR_register_on_exit(LPM3_bits);   // Exit LPM
 }
 
@@ -762,7 +895,7 @@ void __attribute__ ((interrupt(TIMER0_A0_VECTOR))) TIMER0_A0_ISR (void)
 
 void defaultSetupADC()
 {
-	//P4OUT ^= RELAY_OUTPUT;
+    //P4OUT ^= RELAY_OUTPUT;
 
    //select recording inputs and board detection input(A7)
    //as analog inputs
@@ -807,638 +940,656 @@ void __attribute__ ((interrupt(ADC12_VECTOR))) ADC12ISR (void)
 {
 
 
-	//calculate offset correction
-	tempADCresult = ADC12MEM6;
-	//tempADCresult = 512;//fake measurement debug line remove this !!!!!!!!!!!!!!!!!!!!!
-	correctionVccOverTwo = tempADCresult-512;
-	tempCorrectionVariable = 1023+correctionVccOverTwo;
+    //calculate offset correction
+    tempADCresult = ADC12MEM6;
+    //tempADCresult = 512;//fake measurement debug line remove this !!!!!!!!!!!!!!!!!!!!!
+    correctionVccOverTwo = tempADCresult-512;
+    tempCorrectionVariable = 1023+correctionVccOverTwo;
 
-	// ------------------------------- CHECK THE POWER RAIL VOLTAGE -------------------------------
-	tempADCresult = ADC12MEM5;
+    // ------------------------------- CHECK THE POWER RAIL VOLTAGE -------------------------------
+    tempADCresult = ADC12MEM5;
 
 
     //detect voltage level and set mode (with histeresis)
-	if(tempADCresult>=LOW_RAIL_VOLTAGE_FIRST_HIGH)   //Vcc > X > LOW_RAIL_VOLTAGE_FIRST_HIGH
-	{
-		powerMode = POWER_MODE_SOLID_GREEN;
-
-	}
-	else
-	{
-		if(tempADCresult>=LOW_RAIL_VOLTAGE_FIRST_LOW) //LOW_RAIL_VOLTAGE_FIRST_HIGH > X > LOW_RAIL_VOLTAGE_FIRST_LOW
-		{
-				if(powerMode == POWER_MODE_SOLID_GREEN)
-				{
-					//do nothing it is in POWER_MODE_SOLID_GREEN
-				}
-				else
-				{
-					powerMode = POWER_MODE_SOLID_RED;
-				}
-
-		}
-		else
-		{
-			if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_HIGH)  //LOW_RAIL_VOLTAGE_FIRST_LOW > X > LOW_RAIL_VOLTAGE_SECOND_HIGH
-			{
-				powerMode = POWER_MODE_SOLID_RED;
-			}
-			else
-			{
-				if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_LOW)  //LOW_RAIL_VOLTAGE_SECOND_HIGH > X > LOW_RAIL_VOLTAGE_SECOND_LOW
-				{
-						if(powerMode == POWER_MODE_SOLID_RED)
-						{
-							//do nothing it is in POWER_MODE_SOLID_RED
-						}
-						else
-						{
-							powerMode = POWER_MODE_BLINKING_RED;
-						}
-				}
-				else
-				{
-					if(powerMode != POWER_MODE_LEDS_OFF)//once in POWER_MODE_LEDS_OFF do not exit untill voltage is way beyond
-					{
-							if(tempADCresult>=BATERY_DEATH_VOLTAGE_HIGH) //LOW_RAIL_VOLTAGE_SECOND_LOW > X > BATERY_DEATH_VOLTAGE_HIGH
-							{
-								powerMode = POWER_MODE_BLINKING_RED;
-							}
-							else
-							{
-
-								if(tempADCresult>=BATERY_DEATH_VOLTAGE_LOW)  //BATERY_DEATH_VOLTAGE_HIGH > X > BATERY_DEATH_VOLTAGE_LOW
-								{
-										if(powerMode == POWER_MODE_BLINKING_RED)
-										{
-											//do nothing it is in POWER_MODE_BLINKING_RED
-										}
-										else
-										{
-											powerMode = POWER_MODE_LEDS_OFF;
-										}
-								}
-								else                                     //BATERY_DEATH_VOLTAGE_LOW > X
-								{
-									powerMode = POWER_MODE_LEDS_OFF;
-								}
-							}
-					}
-
-				}
-			}
-
-		}
-
-	}
-
-	//set LEDs according to power mode
-	switch(powerMode)
-	{
-		case POWER_MODE_SOLID_GREEN:
-			P4OUT |= GREEN_LED;
-			P1OUT &=  ~(RED_LED);
-			P1OUT |= POWER_ENABLE;
-		break;
-		case POWER_MODE_SOLID_RED:
-			P4OUT &= ~(GREEN_LED);
-			P1OUT |=  RED_LED;
-			P1OUT |= POWER_ENABLE;
-		break;
-		case POWER_MODE_BLINKING_RED:
-			P1OUT |= POWER_ENABLE;
-			if(blinkingLowVoltageTimer>0)
-			{
-				blinkingLowVoltageTimer = blinkingLowVoltageTimer -1;
-			}
-			else
-			{
-				blinkingLowVoltageTimer = BLINKING_LOW_VOLTAGE_TIMER_MAX_VALUE;
-
-				P1OUT ^=  RED_LED;//blinking red
-				P4OUT &=  ~(GREEN_LED);
-			}
-		break;
-		case POWER_MODE_LEDS_OFF:
-			P1OUT &= ~(POWER_ENABLE);
-			P1OUT &=  ~(RED_LED);
-			P4OUT &=  ~(GREEN_LED);
-		break;
-	}
-
-
-
-
-
-	//--------------------------------------------------------------------------------------------
-
-
-	//
-	// ------------------- BOARD DETECTION -----------------------------
-
-	currentEncoderVoltage = ADC12MEM4;
-
-	if(debounceEncoderTimer>0)
-	{
-		debounceEncoderTimer = debounceEncoderTimer -1;
-
-		if(blinkingBoardDetectionTimer>0)
-		{
-			blinkingBoardDetectionTimer = blinkingBoardDetectionTimer -1;
-			//turn off all except blue LED
-			P1OUT &=  ~(RED_LED);
-			P4OUT &=  ~(GREEN_LED);
-
-		}
-		else
-		{
-			blinkingBoardDetectionTimer = BLINKING_BOARD_DETECTION_TIMER_MAX_VALUE;
-			P4OUT ^=  BLUE_LED;//blink blue LED
-			//turn off all except blue led
-			P1OUT &=  ~(RED_LED);
-			P4OUT &=  ~(GREEN_LED);
-		}
-	}
-	else
-	{
-		P4OUT &=  ~(BLUE_LED);
-		//if board detection voltage is changing
-		if((currentEncoderVoltage - lastEncoderVoltage)>100 || (lastEncoderVoltage - currentEncoderVoltage)>100)
-		{
-			debounceEncoderTimer = BOARD_DETECTION_TIMER_MAX_VALUE;
-		}
-	}
-
-	if(debounceEncoderTimer==0)
-	{
-		if(currentEncoderVoltage < 155 )
-		{
-			//default
-			if(operationMode != OPERATION_MODE_DEFAULT)
-			{
-				operationMode = OPERATION_MODE_DEFAULT;
-				sendStringWithEscapeSequence("BRD:0;");
-				setupOperationMode();
-
-			}
-
-		}
-		else if((currentEncoderVoltage >= 155) && (currentEncoderVoltage < 310))
-		{
-			//first board BNC
-			if(operationMode != OPERATION_MODE_MORE_ANALOG)
-			{
-				operationMode = OPERATION_MODE_MORE_ANALOG;
-				sendStringWithEscapeSequence("BRD:1;");
-				setupOperationMode();
-
-			}
-
-		}
-		else if((currentEncoderVoltage >= 310) && (currentEncoderVoltage < 465))
-		{
-			//second board - Reaction timer
-
-			if(operationMode != OPERATION_MODE_BNC)
-			{
-				operationMode = OPERATION_MODE_BNC;
-				sendStringWithEscapeSequence("BRD:3;");
-				setupOperationMode();
-
-			}
-
-		}
-		else if((currentEncoderVoltage >= 465) && (currentEncoderVoltage < 620))
-		{
-			//third board - dev board
-			if(operationMode != OPERATION_MODE_FIVE_DIGITAL)
-			{
-				operationMode = OPERATION_MODE_FIVE_DIGITAL;
-				sendStringWithEscapeSequence("BRD:2;");
-				setupOperationMode();
-
-			}
-
-
-		}
-		else if((currentEncoderVoltage >= 620) && (currentEncoderVoltage < 775))
-		{
-			//forth board
-			if(operationMode != OPERATION_MODE_ARDUINO_BOARD)
-			{
-				operationMode = OPERATION_MODE_ARDUINO_BOARD;
-				sendStringWithEscapeSequence("BRD:4;");
-				setupOperationMode();
-
-			}
-		}
-		else if((currentEncoderVoltage >= 775) && (currentEncoderVoltage < 930))
-		{
-			//fifth board
-
-		}
-		else if((currentEncoderVoltage >= 930))
-		{
-			//sixth board
-
-		}
-	}
-
-	lastEncoderVoltage = currentEncoderVoltage;
-
-
-	//------------------------ POWER SAVE INDICATION --------------------------------------------
-		if(saveBatteryLEDIndicatorCounter>0)
-		{
-			saveBatteryLEDIndicatorCounter--;
-			if (saveBatteryLEDIndicatorCounter==0)
-			{
-				P4OUT &=  ~(BLUE_LED);
-			}
-			else
-			{
-				P4OUT |=  BLUE_LED;
-				P1OUT &=  ~(RED_LED);
-				P4OUT &=  ~(GREEN_LED);
-			}
-		}
-
-
-	//--------------------- BOARD EXECUTION -------------------------------
-
-
-	switch(operationMode)
-		{
-
-			case OPERATION_MODE_DEFAULT:
-			case OPERATION_MODE_FIVE_DIGITAL:
-			case OPERATION_MODE_ARDUINO_BOARD:
-				//two additional digital inputs
-
-				//================= EVENT 4 code ======================
-
-				if(debounceTimer4>0)
-				{
-					debounceTimer4 = debounceTimer4 -1;
-				}
-				else
-				{
-					if(eventEnabled4>0)
-					{
-							if(P6IN & IO4)
-							{
-									eventEnabled4 = 0;
-									debounceTimer4 = DEBOUNCE_TIME;
-									sendStringWithEscapeSequence("EVNT:4;");
-							}
-					}
-					else
-					{
-						if(!(P6IN & IO4))
-						{
-							eventEnabled4 = 1;
-						}
-
-					}
-				}
-
-				//================= EVENT 5 code ======================
-
-				if(debounceTimer5>0)
-				{
-					debounceTimer5 = debounceTimer5 -1;
-				}
-				else
-				{
-					if(eventEnabled5>0)
-					{
-							if(P6IN & IO5)
-							{
-									eventEnabled5 = 0;
-									debounceTimer5 = DEBOUNCE_TIME;
-									sendStringWithEscapeSequence("EVNT:5;");
-							}
-					}
-					else
-					{
-						if(!(P6IN & IO5))
-						{
-							eventEnabled5 = 1;
-						}
-
-					}
-				}
-
-
-			case OPERATION_MODE_BNC:
-			case OPERATION_MODE_MORE_ANALOG:
-			default:
-				//============== event 1 =================
-
-					if(debounceTimer1>0)
-					{
-						debounceTimer1 = debounceTimer1 -1;
-					}
-					else
-					{
-						if(eventEnabled1>0)
-						{
-								if(P6IN & IO1)
-								{
-										eventEnabled1 = 0;
-										debounceTimer1 = DEBOUNCE_TIME;
-										sendStringWithEscapeSequence("EVNT:1;");
-								}
-						}
-						else
-						{
-							if(!(P6IN & IO1))
-							{
-								eventEnabled1 = 1;
-							}
-						}
-					}
-
-					//================= EVENT 2 code ======================
-
-					if(debounceTimer2>0)
-					{
-						debounceTimer2 = debounceTimer2 -1;
-					}
-					else
-					{
-						if(eventEnabled2>0)
-						{
-								if(P6IN & IO2)
-								{
-										eventEnabled2 = 0;
-										debounceTimer2 = DEBOUNCE_TIME;
-										sendStringWithEscapeSequence("EVNT:2;");
-								}
-						}
-						else
-						{
-							if(!(P6IN & IO2))
-							{
-								eventEnabled2 = 1;
-							}
-
-						}
-					}
-
-					//================= EVENT 3 code ======================
-
-					if(debounceTimer3>0)
-					{
-						debounceTimer3 = debounceTimer3 -1;
-					}
-					else
-					{
-						if(eventEnabled3>0)
-						{
-								if(P6IN & IO3)
-								{
-										eventEnabled3 = 0;
-										debounceTimer3 = DEBOUNCE_TIME;
-										sendStringWithEscapeSequence("EVNT:3;");
-								}
-						}
-						else
-						{
-							if(!(P6IN & IO3))
-							{
-								eventEnabled3 = 1;
-							}
-
-						}
-					}
-
-		}
-
-	//========== ADC code ======================
-
-	if(circularBufferLocked ==0)
-	{
-		    resetPowerWatchDogTimerCounter = 0;
-			tempIndex = head;//remember position of begining of frame to put flag bit
-			tempADCresult = ADC12MEM0;
-			//correct DC offset
-			if((int)tempADCresult<correctionVccOverTwo)
-			{
-				tempADCresult = 0;
-			}
-			else if(tempCorrectionVariable<tempADCresult)
-			{
-					tempADCresult = 1023;
-			}
-			else
-			{
-				tempADCresult = tempADCresult - correctionVccOverTwo;
-			}
-
-			if(powerWatchDogTimerCounter>0)
-			{
-				if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
-				{
-					resetPowerWatchDogTimerCounter = 1;
-				}
-			}
-
-
-			if(sampleData == 1)
-			{
-				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
-				{
-					head = 0;
-				}
-				circularBuffer[head++] = (0x7Fu & tempADCresult);
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
-				{
-					head = 0;
-				}
-			}
-
-
-
-			tempADCresult = ADC12MEM1;
-
-			//correct DC offset
-			if((int)tempADCresult<correctionVccOverTwo)
-			{
-				tempADCresult = 0;
-			}
-			else if(tempCorrectionVariable<tempADCresult)
-			{
-					tempADCresult = 1023;
-			}
-			else
-			{
-				tempADCresult = tempADCresult - correctionVccOverTwo;
-			}
-
-
-
-			if(powerWatchDogTimerCounter>0)
-			{
-				if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
-				{
-					resetPowerWatchDogTimerCounter = 1;
-				}
-			}
-
-			if(sampleData == 1)
-			{
-				circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
-				{
-					head = 0;
-				}
-				circularBuffer[head++] = (0x7Fu & tempADCresult);
-				difference++;
-				if(head==MEGA_DATA_LENGTH)
-				{
-					head = 0;
-				}
-			}
-			if(numberOfChannels>2)
-			{
-				tempADCresult = ADC12MEM2;
-
-				//correct DC offset
-				if((int)tempADCresult<correctionVccOverTwo)
-				{
-					tempADCresult = 0;
-				}
-				else if(tempCorrectionVariable<tempADCresult)
-				{
-						tempADCresult = 1023;
-				}
-				else
-				{
-					tempADCresult = tempADCresult - correctionVccOverTwo;
-				}
-
-
-				if(powerWatchDogTimerCounter>0)
-				{
-					if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
-					{
-						resetPowerWatchDogTimerCounter = 1;
-					}
-				}
-
-				if(sampleData == 1)
-				{
-					circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
-					{
-						head = 0;
-					}
-					circularBuffer[head++] = (0x7Fu & tempADCresult);
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
-					{
-						head = 0;
-					}
-				}
-
-				tempADCresult = ADC12MEM3;
-
-				//correct DC offset
-				if((int)tempADCresult<correctionVccOverTwo)
-				{
-					tempADCresult = 0;
-				}
-				else if(tempCorrectionVariable<tempADCresult)
-				{
-						tempADCresult = 1023;
-				}
-				else
-				{
-					tempADCresult = tempADCresult - correctionVccOverTwo;
-				}
-
-				if(powerWatchDogTimerCounter>0)
-				{
-					if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
-					{
-						resetPowerWatchDogTimerCounter = 1;
-					}
-				}
-
-				if(sampleData == 1)
-				{
-
-
-					circularBuffer[head++] = (0x7u & (tempADCresult>>7));
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
-					{
-						head = 0;
-					}
-					circularBuffer[head++] = (0x7Fu & tempADCresult);
-					difference++;
-					if(head==MEGA_DATA_LENGTH)
-					{
-						head = 0;
-					}
-				}
-
-			}
-
-			circularBuffer[tempIndex] |= BIT7;//put flag for begining of frame
-
-			if(resetPowerWatchDogTimerCounter==1)
-			{
-				powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
-			}
-
-
-
-
-	}
-	else
-	{
-		tempADCresult = ADC12MEM0;
-		tempADCresult = ADC12MEM1;
-	}
-	if(powerWatchDogTimerCounter>0)
-	{
-		powerWatchDogTimerCounter--;
-		if(powerWatchDogTimerCounter==0)
-		{
-			//put MSP to sleep, disable voltage regulator
-			P1OUT &=  ~(POWER_ENABLE);
-			P1OUT &=  ~(RED_LED);
-			P4OUT &=  ~(GREEN_LED);
-			P4OUT &=  ~(BLUE_LED);
-			USB_disconnect();
-			USB_disable();
-
-			//disable ADC
-			ADC12CTL0 &=~ADC12ENC;
-			ADC12CTL0 &=~(REFON + ADC12ON);
-			ADC12CTL0 =0;
-
-			TA0CCR0 = POWER_SAVE_MODE_PERIOD;
-			TA0CTL = TASSEL_2+MC_1+TACLR+ID1; // ACLK, count to CCR0 then roll, clear TAR
-			weAreInPowerSaveMode = 1;
-			//__disable_interrupt();
-			//enter low power mode
-			//  PMMCTL0_H = PMMPW_H;                      // open PMM
-			//  PMMCTL0_L |= PMMREGOFF;                   // set Flag to enter LPM4.5 with LPM4 request
-			//  LPM4;
-			//  __no_operation();// now enter LPM4.5
-			return;
-		}
-	}
+    if(tempADCresult>=LOW_RAIL_VOLTAGE_FIRST_HIGH)   //Vcc > X > LOW_RAIL_VOLTAGE_FIRST_HIGH
+    {
+        powerMode = POWER_MODE_SOLID_GREEN;
+
+    }
+    else
+    {
+        if(tempADCresult>=LOW_RAIL_VOLTAGE_FIRST_LOW) //LOW_RAIL_VOLTAGE_FIRST_HIGH > X > LOW_RAIL_VOLTAGE_FIRST_LOW
+        {
+                if(powerMode == POWER_MODE_SOLID_GREEN)
+                {
+                    //do nothing it is in POWER_MODE_SOLID_GREEN
+                }
+                else
+                {
+                    powerMode = POWER_MODE_SOLID_RED;
+                }
+
+        }
+        else
+        {
+            if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_HIGH)  //LOW_RAIL_VOLTAGE_FIRST_LOW > X > LOW_RAIL_VOLTAGE_SECOND_HIGH
+            {
+                powerMode = POWER_MODE_SOLID_RED;
+            }
+            else
+            {
+                if(tempADCresult>=LOW_RAIL_VOLTAGE_SECOND_LOW)  //LOW_RAIL_VOLTAGE_SECOND_HIGH > X > LOW_RAIL_VOLTAGE_SECOND_LOW
+                {
+                        if(powerMode == POWER_MODE_SOLID_RED)
+                        {
+                            //do nothing it is in POWER_MODE_SOLID_RED
+                        }
+                        else
+                        {
+                            powerMode = POWER_MODE_BLINKING_RED;
+                        }
+                }
+                else
+                {
+                    if(powerMode != POWER_MODE_LEDS_OFF)//once in POWER_MODE_LEDS_OFF do not exit untill voltage is way beyond
+                    {
+                            if(tempADCresult>=BATERY_DEATH_VOLTAGE_HIGH) //LOW_RAIL_VOLTAGE_SECOND_LOW > X > BATERY_DEATH_VOLTAGE_HIGH
+                            {
+                                powerMode = POWER_MODE_BLINKING_RED;
+                            }
+                            else
+                            {
+
+                                if(tempADCresult>=BATERY_DEATH_VOLTAGE_LOW)  //BATERY_DEATH_VOLTAGE_HIGH > X > BATERY_DEATH_VOLTAGE_LOW
+                                {
+                                        if(powerMode == POWER_MODE_BLINKING_RED)
+                                        {
+                                            //do nothing it is in POWER_MODE_BLINKING_RED
+                                        }
+                                        else
+                                        {
+                                            powerMode = POWER_MODE_LEDS_OFF;
+                                        }
+                                }
+                                else                                     //BATERY_DEATH_VOLTAGE_LOW > X
+                                {
+                                    powerMode = POWER_MODE_LEDS_OFF;
+                                }
+                            }
+                    }
+
+                }
+            }
+
+        }
+
+    }
+
+    //set LEDs according to power mode
+    switch(powerMode)
+    {
+        case POWER_MODE_SOLID_GREEN:
+            P4OUT |= GREEN_LED;
+            P1OUT &=  ~(RED_LED);
+            P1OUT |= POWER_ENABLE;
+        break;
+        case POWER_MODE_SOLID_RED:
+            P4OUT &= ~(GREEN_LED);
+            P1OUT |=  RED_LED;
+            P1OUT |= POWER_ENABLE;
+        break;
+        case POWER_MODE_BLINKING_RED:
+            P1OUT |= POWER_ENABLE;
+            if(blinkingLowVoltageTimer>0)
+            {
+                blinkingLowVoltageTimer = blinkingLowVoltageTimer -1;
+            }
+            else
+            {
+                blinkingLowVoltageTimer = BLINKING_LOW_VOLTAGE_TIMER_MAX_VALUE;
+
+                P1OUT ^=  RED_LED;//blinking red
+                P4OUT &=  ~(GREEN_LED);
+            }
+        break;
+        case POWER_MODE_LEDS_OFF:
+            P1OUT &= ~(POWER_ENABLE);
+            P1OUT &=  ~(RED_LED);
+            P4OUT &=  ~(GREEN_LED);
+        break;
+    }
+
+
+
+
+
+    //--------------------------------------------------------------------------------------------
+
+
+    //
+    // ------------------- BOARD DETECTION -----------------------------
+
+    currentEncoderVoltage = ADC12MEM4;
+
+    if(debounceEncoderTimer>0)
+    {
+        debounceEncoderTimer = debounceEncoderTimer -1;
+
+        if(blinkingBoardDetectionTimer>0)
+        {
+            blinkingBoardDetectionTimer = blinkingBoardDetectionTimer -1;
+            //turn off all except blue LED
+            P1OUT &=  ~(RED_LED);
+            P4OUT &=  ~(GREEN_LED);
+
+        }
+        else
+        {
+            blinkingBoardDetectionTimer = BLINKING_BOARD_DETECTION_TIMER_MAX_VALUE;
+            P4OUT ^=  BLUE_LED;//blink blue LED
+            //turn off all except blue led
+            P1OUT &=  ~(RED_LED);
+            P4OUT &=  ~(GREEN_LED);
+        }
+    }
+    else
+    {
+        P4OUT &=  ~(BLUE_LED);
+        //if board detection voltage is changing
+        if((currentEncoderVoltage - lastEncoderVoltage)>100 || (lastEncoderVoltage - currentEncoderVoltage)>100)
+        {
+            debounceEncoderTimer = BOARD_DETECTION_TIMER_MAX_VALUE;
+        }
+    }
+
+    if(debounceEncoderTimer==0)
+    {
+        if(currentEncoderVoltage < 155 )
+        {
+            //default
+            if(operationMode != OPERATION_MODE_DEFAULT)
+            {
+                operationMode = OPERATION_MODE_DEFAULT;
+                sendStringWithEscapeSequence("BRD:0;");
+                setupOperationMode();
+
+            }
+
+        }
+        else if((currentEncoderVoltage >= 155) && (currentEncoderVoltage < 310))
+        {
+            //first board BNC
+            if(operationMode != OPERATION_MODE_MORE_ANALOG)
+            {
+                operationMode = OPERATION_MODE_MORE_ANALOG;
+                sendStringWithEscapeSequence("BRD:1;");
+                setupOperationMode();
+
+            }
+
+        }
+        else if((currentEncoderVoltage >= 310) && (currentEncoderVoltage < 465))
+        {
+            //second board - Reaction timer
+
+            if(operationMode != OPERATION_MODE_BNC)
+            {
+                operationMode = OPERATION_MODE_BNC;
+                sendStringWithEscapeSequence("BRD:3;");
+                setupOperationMode();
+
+            }
+
+        }
+        else if((currentEncoderVoltage >= 465) && (currentEncoderVoltage < 620))
+        {
+            //third board - dev board
+            if(operationMode != OPERATION_MODE_FIVE_DIGITAL)
+            {
+                operationMode = OPERATION_MODE_FIVE_DIGITAL;
+                sendStringWithEscapeSequence("BRD:2;");
+                setupOperationMode();
+
+            }
+
+
+        }
+        else if((currentEncoderVoltage >= 620) && (currentEncoderVoltage < 775))
+        {
+            //forth board
+            if(operationMode != OPERATION_MODE_HAMMER)
+            {
+                operationMode = OPERATION_MODE_HAMMER;
+                sendStringWithEscapeSequence("BRD:4;");
+                setupOperationMode();
+
+            }
+        }
+        else if((currentEncoderVoltage >= 775) && (currentEncoderVoltage < 930))
+        {
+            //fifth board
+
+            if(operationMode != OPERATION_MODE_JOYSTICK)
+            {
+                operationMode = OPERATION_MODE_JOYSTICK;
+                sendStringWithEscapeSequence("BRD:5;");
+                setupOperationMode();
+
+            }
+        }
+        else if((currentEncoderVoltage >= 930))
+        {
+            //sixth board
+
+        }
+    }
+
+    lastEncoderVoltage = currentEncoderVoltage;
+
+
+    //------------------------ POWER SAVE INDICATION --------------------------------------------
+        if(saveBatteryLEDIndicatorCounter>0)
+        {
+            saveBatteryLEDIndicatorCounter--;
+            if (saveBatteryLEDIndicatorCounter==0)
+            {
+                P4OUT &=  ~(BLUE_LED);
+            }
+            else
+            {
+                P4OUT |=  BLUE_LED;
+                P1OUT &=  ~(RED_LED);
+                P4OUT &=  ~(GREEN_LED);
+            }
+        }
+
+
+    //--------------------- BOARD EXECUTION -------------------------------
+
+
+    switch(operationMode)
+        {
+            case OPERATION_MODE_JOYSTICK:
+
+                break;
+            case OPERATION_MODE_DEFAULT:
+            case OPERATION_MODE_FIVE_DIGITAL:
+
+                //two additional digital inputs
+
+
+
+                //================= EVENT 5 code ======================
+
+                if(debounceTimer5>0)
+                {
+                    debounceTimer5 = debounceTimer5 -1;
+                }
+                else
+                {
+                    if(eventEnabled5>0)
+                    {
+                            if(P6IN & IO5)
+                            {
+                                    eventEnabled5 = 0;
+                                    debounceTimer5 = DEBOUNCE_TIME;
+                                    sendStringWithEscapeSequence("EVNT:5;");
+                            }
+                    }
+                    else
+                    {
+                        if(!(P6IN & IO5))
+                        {
+                            eventEnabled5 = 1;
+                        }
+
+                    }
+                }
+
+
+            case OPERATION_MODE_HAMMER:
+
+                //================= EVENT 4 code ======================
+                if(debounceTimer4>0)
+                {
+                    debounceTimer4 = debounceTimer4 -1;
+                }
+                else
+                {
+                    if(eventEnabled4>0)
+                    {
+                            if(P6IN & IO4)
+                            {
+                                    eventEnabled4 = 0;
+                                    debounceTimer4 = DEBOUNCE_TIME;
+                                    sendStringWithEscapeSequence("EVNT:4;");
+                            }
+                    }
+                    else
+                    {
+                        if(!(P6IN & IO4))
+                        {
+                            eventEnabled4 = 1;
+                        }
+
+                    }
+                }
+
+
+            case OPERATION_MODE_BNC:
+            case OPERATION_MODE_MORE_ANALOG:
+
+                //============== event 1 =================
+
+                    if(debounceTimer1>0)
+                    {
+                        debounceTimer1 = debounceTimer1 -1;
+                    }
+                    else
+                    {
+                        if(eventEnabled1>0)
+                        {
+                                if(P6IN & IO1)
+                                {
+                                        eventEnabled1 = 0;
+                                        debounceTimer1 = DEBOUNCE_TIME;
+                                        sendStringWithEscapeSequence("EVNT:1;");
+                                }
+                        }
+                        else
+                        {
+                            if(!(P6IN & IO1))
+                            {
+                                eventEnabled1 = 1;
+                            }
+                        }
+                    }
+
+                    //================= EVENT 2 code ======================
+
+                    if(debounceTimer2>0)
+                    {
+                        debounceTimer2 = debounceTimer2 -1;
+                    }
+                    else
+                    {
+                        if(eventEnabled2>0)
+                        {
+                                if(P6IN & IO2)
+                                {
+                                        eventEnabled2 = 0;
+                                        debounceTimer2 = DEBOUNCE_TIME;
+                                        sendStringWithEscapeSequence("EVNT:2;");
+                                }
+                        }
+                        else
+                        {
+                            if(!(P6IN & IO2))
+                            {
+                                eventEnabled2 = 1;
+                            }
+
+                        }
+                    }
+
+                    //================= EVENT 3 code ======================
+
+                    if(debounceTimer3>0)
+                    {
+                        debounceTimer3 = debounceTimer3 -1;
+                    }
+                    else
+                    {
+                        if(eventEnabled3>0)
+                        {
+                                if(P6IN & IO3)
+                                {
+                                        eventEnabled3 = 0;
+                                        debounceTimer3 = DEBOUNCE_TIME;
+                                        sendStringWithEscapeSequence("EVNT:3;");
+                                }
+                        }
+                        else
+                        {
+                            if(!(P6IN & IO3))
+                            {
+                                eventEnabled3 = 1;
+                            }
+
+                        }
+                    }
+            default:
+                //do nothing, that is for joystick
+        }
+
+    //========== ADC code ======================
+
+    if(circularBufferLocked ==0)
+    {
+            resetPowerWatchDogTimerCounter = 0;
+            tempIndex = head;//remember position of begining of frame to put flag bit
+            tempADCresult = ADC12MEM0;
+            //correct DC offset
+            if((int)tempADCresult<correctionVccOverTwo)
+            {
+                tempADCresult = 0;
+            }
+            else if(tempCorrectionVariable<tempADCresult)
+            {
+                    tempADCresult = 1023;
+            }
+            else
+            {
+                tempADCresult = tempADCresult - correctionVccOverTwo;
+            }
+
+            if(powerWatchDogTimerCounter>0)
+            {
+                if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+                {
+                    resetPowerWatchDogTimerCounter = 1;
+                }
+            }
+
+
+            if(sampleData == 1)
+            {
+                circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+                difference++;
+                if(head==MEGA_DATA_LENGTH)
+                {
+                    head = 0;
+                }
+                circularBuffer[head++] = (0x7Fu & tempADCresult);
+                difference++;
+                if(head==MEGA_DATA_LENGTH)
+                {
+                    head = 0;
+                }
+            }
+
+
+
+            tempADCresult = ADC12MEM1;
+
+            //correct DC offset
+            if((int)tempADCresult<correctionVccOverTwo)
+            {
+                tempADCresult = 0;
+            }
+            else if(tempCorrectionVariable<tempADCresult)
+            {
+                    tempADCresult = 1023;
+            }
+            else
+            {
+                tempADCresult = tempADCresult - correctionVccOverTwo;
+            }
+
+
+
+            if(powerWatchDogTimerCounter>0)
+            {
+                if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+                {
+                    resetPowerWatchDogTimerCounter = 1;
+                }
+            }
+
+            if(sampleData == 1)
+            {
+                circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+                difference++;
+                if(head==MEGA_DATA_LENGTH)
+                {
+                    head = 0;
+                }
+                circularBuffer[head++] = (0x7Fu & tempADCresult);
+                difference++;
+                if(head==MEGA_DATA_LENGTH)
+                {
+                    head = 0;
+                }
+            }
+            if(numberOfChannels>3)
+            {
+                tempADCresult = ADC12MEM2;
+
+                //correct DC offset
+                if((int)tempADCresult<correctionVccOverTwo)
+                {
+                    tempADCresult = 0;
+                }
+                else if(tempCorrectionVariable<tempADCresult)
+                {
+                        tempADCresult = 1023;
+                }
+                else
+                {
+                    tempADCresult = tempADCresult - correctionVccOverTwo;
+                }
+
+
+                if(powerWatchDogTimerCounter>0)
+                {
+                    if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+                    {
+                        resetPowerWatchDogTimerCounter = 1;
+                    }
+                }
+
+                if(sampleData == 1)
+                {
+                    circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+                    difference++;
+                    if(head==MEGA_DATA_LENGTH)
+                    {
+                        head = 0;
+                    }
+                    circularBuffer[head++] = (0x7Fu & tempADCresult);
+                    difference++;
+                    if(head==MEGA_DATA_LENGTH)
+                    {
+                        head = 0;
+                    }
+                }
+
+
+            }
+            if(numberOfChannels>2)
+            {
+                    tempADCresult = ADC12MEM3;
+
+                    //correct DC offset
+                    if((int)tempADCresult<correctionVccOverTwo)
+                    {
+                        tempADCresult = 0;
+                    }
+                    else if(tempCorrectionVariable<tempADCresult)
+                    {
+                            tempADCresult = 1023;
+                    }
+                    else
+                    {
+                        tempADCresult = tempADCresult - correctionVccOverTwo;
+                    }
+
+                    if(powerWatchDogTimerCounter>0)
+                    {
+                        if(tempADCresult>THRESHOLD_FOR_POWER_SAVING)
+                        {
+                            resetPowerWatchDogTimerCounter = 1;
+                        }
+                    }
+
+                    if(sampleData == 1)
+                    {
+
+
+                        circularBuffer[head++] = (0x7u & (tempADCresult>>7));
+                        difference++;
+                        if(head==MEGA_DATA_LENGTH)
+                        {
+                            head = 0;
+                        }
+                        circularBuffer[head++] = (0x7Fu & tempADCresult);
+                        difference++;
+                        if(head==MEGA_DATA_LENGTH)
+                        {
+                            head = 0;
+                        }
+                    }
+
+            }
+
+            circularBuffer[tempIndex] |= BIT7;//put flag for begining of frame
+
+            if(resetPowerWatchDogTimerCounter==1)
+            {
+                powerWatchDogTimerCounter = POWER_WATCH_DOG_TIMER_MAX_VALUE;
+            }
+
+
+
+
+    }
+    else
+    {
+        tempADCresult = ADC12MEM0;
+        tempADCresult = ADC12MEM1;
+    }
+    if(powerWatchDogTimerCounter>0)
+    {
+        powerWatchDogTimerCounter--;
+        if(powerWatchDogTimerCounter==0)
+        {
+            //put MSP to sleep, disable voltage regulator
+            P1OUT &=  ~(POWER_ENABLE);
+            P1OUT &=  ~(RED_LED);
+            P4OUT &=  ~(GREEN_LED);
+            P4OUT &=  ~(BLUE_LED);
+            USB_disconnect();
+            USB_disable();
+
+            //disable ADC
+            ADC12CTL0 &=~ADC12ENC;
+            ADC12CTL0 &=~(REFON + ADC12ON);
+            ADC12CTL0 =0;
+
+            TA0CCR0 = POWER_SAVE_MODE_PERIOD;
+            TA0CTL = TASSEL_2+MC_1+TACLR+ID1; // ACLK, count to CCR0 then roll, clear TAR
+            weAreInPowerSaveMode = 1;
+            //__disable_interrupt();
+            //enter low power mode
+            //  PMMCTL0_H = PMMPW_H;                      // open PMM
+            //  PMMCTL0_L |= PMMREGOFF;                   // set Flag to enter LPM4.5 with LPM4 request
+            //  LPM4;
+            //  __no_operation();// now enter LPM4.5
+            return;
+        }
+    }
 //Uncomment this when not using repeat of sequence
-	ADC12CTL0 &= ~ADC12SC;
+    ADC12CTL0 &= ~ADC12SC;
 
 
 }
